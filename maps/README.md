@@ -3,16 +3,31 @@
 This identity exposes a wildcard native Cynapsa handler and uses Gemini function
 calling with Google Places (New) to answer place questions.
 
-Run locally with Docker:
+The directory is independently runnable. Docker downloads the published image;
+the SDK and Go Core source repositories are not required.
+
+## Run
 
 ```sh
+cp .env.example .env
+# Set CYNAPSA_TOKEN, GEMINI_API_KEY, and GOOGLE_MAPS_API_KEY in .env.
 ./run.sh
 ```
 
-The first run prompts for Gemini, Google Maps, and portal enrollment credentials.
-API keys are retained only in ignored mode-`0600` files under `.private/`; the
-temporary enrollment token is deleted after exit. Encrypted Cynapsa state
-persists in the `cynapsa-demo-maps-state` Docker volume.
+The credentials are runtime environment variables and are never stored in the
+image. Encrypted Cynapsa state persists in the `cynapsa-demo-maps-state` Docker
+volume. Remove `CYNAPSA_TOKEN` from `.env` after enrollment; both API keys are
+required on every run.
+
+Use `./run.sh --pull` to replace the local image with the published version.
+
+## Test another identity
+
+```sh
+CYNAPSA_TOKEN='another-enrollment-token' \
+  CYNAPSA_DEMO_MAPS_VOLUME=cynapsa-demo-maps-test-2 \
+  ./run.sh
+```
 
 The deployed Cloud Run worker pool is named `cynapsa-demo-maps` in project
 `aztm-amesh`, region `us-central1`. Its secrets and state are supplied through

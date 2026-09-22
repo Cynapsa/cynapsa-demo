@@ -1,7 +1,8 @@
 # Run the Cynapsa demo client
 
 The client runs on your laptop and communicates with the deployed demo agents
-over Cynapsa. You only need Docker and a Cynapsa enrollment token.
+over Cynapsa. You only need Docker and a Cynapsa enrollment token. The
+application, Python SDK, and Go Core are already included in the image.
 
 ## Requirements
 
@@ -10,13 +11,10 @@ over Cynapsa. You only need Docker and a Cynapsa enrollment token.
 - A client agent in the `cynapsa-demo` mesh
 - A fresh enrollment token for that client agent
 
-Create the client agent and its enrollment token in the Cynapsa management
-portal. Treat the token like a password and do not commit it to Git or paste it
-into the repository files.
+Treat the token like a password. Never commit `.env` or paste the token into a
+tracked repository file.
 
-## Download the client
-
-To download only the client directory instead of the entire repository:
+## Download only the client
 
 ```sh
 git clone --filter=blob:none --sparse https://github.com/Cynapsa/cynapsa-demo.git
@@ -25,29 +23,28 @@ git sparse-checkout set client
 cd client
 ```
 
-If you already cloned the repository, open a terminal in its client directory:
-
-```sh
-cd /path/to/cynapsa-demo/client
-```
-
 ## First run
 
-Start the client:
+Create an ignored environment file and replace the token placeholder:
 
 ```sh
+cp .env.example .env
+# Edit .env, then:
 ./run.sh
 ```
 
-The script downloads and verifies the correct client image for your computer.
-When prompted, paste the enrollment token and press Enter. The token is not
-shown while you type.
+Alternatively, provide the token directly from the shell:
 
-The client enrolls once and saves its encrypted installation profile in the
-Docker volume `cynapsa-demo-client-state`. The temporary enrollment-token file
-is removed after the process exits.
+```sh
+CYNAPSA_TOKEN='your-enrollment-token' ./run.sh
+```
 
-After the client starts, enter a question at the prompt. For example:
+The script downloads and verifies the correct client image, enrolls once, and
+saves the encrypted installation profile in the
+`cynapsa-demo-client-state` Docker volume. Remove `CYNAPSA_TOKEN` from `.env`
+after enrollment.
+
+After the prompt appears, ask a question such as:
 
 ```text
 Where is the nearest gym to 12201 Park Drive, Hollywood, Florida?
@@ -57,40 +54,43 @@ Enter `quit` to close the client.
 
 ## Later runs
 
-The saved installation profile is reused, so later runs do not require another
-token:
-
 ```sh
 cd /path/to/cynapsa-demo/client
 ./run.sh
 ```
 
-## Update the client image
-
-To download and run the current published client image again:
+## Update the image
 
 ```sh
 ./run.sh --pull
 ```
 
-## Enroll this laptop again
+## Test another token without losing the current installation
 
-If the saved installation must be replaced, remove its Docker volume and run
-the client with a new enrollment token:
+Use a different Docker volume for the other token:
+
+```sh
+CYNAPSA_TOKEN='another-enrollment-token' \
+  CYNAPSA_DEMO_CLIENT_VOLUME=cynapsa-demo-client-test-2 \
+  ./run.sh
+```
+
+Use the same `CYNAPSA_DEMO_CLIENT_VOLUME` on later runs of that installation.
+
+## Remove the local installation
 
 ```sh
 docker volume rm cynapsa-demo-client-state
-./run.sh
 ```
 
-Removing this volume permanently deletes the client installation state stored
-on this laptop. It does not delete the agent in the Cynapsa portal.
+This permanently removes the saved client installation from the laptop. It
+does not delete the agent in the Cynapsa portal.
 
 ## Troubleshooting
 
 - `Docker is required`: install Docker Desktop.
 - `Docker is not running`: start Docker Desktop and wait until it is ready.
-- Enrollment fails: generate a fresh enrollment token; enrollment tokens are
-  intended for first-time use.
+- `an enrollment token is required`: set `CYNAPSA_TOKEN` in `.env` or the shell.
+- Enrollment fails: generate a fresh token; enrollment tokens are intended for
+  first-time use and belong to one identity.
 - To force a clean image download, run `./run.sh --pull`.
-

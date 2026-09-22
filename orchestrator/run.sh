@@ -2,49 +2,70 @@
 set -Eeuo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-IMAGE=${CYNAPSA_DEMO_ORCHESTRATOR_IMAGE:-cynapsa-demo-orchestrator:local}
-VOLUME=${CYNAPSA_DEMO_ORCHESTRATOR_VOLUME:-cynapsa-demo-orchestrator-state}
+VERSION=0.2.0
+ROLE=orchestrator
 
 command -v docker >/dev/null || { echo "Docker is required." >&2; exit 69; }
 docker info >/dev/null 2>&1 || { echo "Docker is not running." >&2; exit 69; }
-if [[ ${1:-} == "--build" ]]; then docker image rm "$IMAGE" >/dev/null 2>&1 || true; shift; fi
-[[ $# -eq 0 ]] || { echo "usage: ./run.sh [--build]" >&2; exit 64; }
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then "$ROOT/build.sh"; fi
+case "$(docker version --format '{{.Server.Arch}}')" in
+  arm64|aarch64)
+    ARCH=arm64
+    EXPECTED_SHA256=9bd9c5ba700f1c02089b81d381220020edb98b10801f67afa3cf807fbd15c583
+    ;;
+  amd64|x86_64)
+    ARCH=amd64
+    EXPECTED_SHA256=df98b049cc3a901e72a38504ea8bf0058e017da164dbc012ee089c5ba4e76bf1
+    ;;
+  *) echo "Unsupported Docker architecture." >&2; exit 69 ;;
+esac
 
-mkdir -p "$ROOT/.private"
-chmod 700 "$ROOT/.private"
-gemini_file="$ROOT/.private/gemini_api_key"
-if [[ ! -s "$gemini_file" ]]; then
-  key=${GEMINI_API_KEY:-}
-  if [[ -z "$key" ]]; then read -r -s -p "Gemini API key: " key; printf '\n'; fi
-  [[ -n "$key" ]] || { echo "Gemini API key cannot be empty." >&2; exit 64; }
-  umask 077
-  printf '%s' "$key" > "$gemini_file"
-  unset key GEMINI_API_KEY
+IMAGE=${CYNAPSA_DEMO_ORCHESTRATOR_IMAGE:-cynapsa-demo-$ROLE:$VERSION-$ARCH}
+VOLUME=${CYNAPSA_DEMO_ORCHESTRATOR_VOLUME:-cynapsa-demo-$ROLE-state}
+ENV_FILE=${CYNAPSA_DEMO_ORCHESTRATOR_ENV_FILE:-$ROOT/.env}
+ASSET_URL="https://github.com/Cynapsa/cynapsa-demo/releases/download/v$VERSION/cynapsa-demo-$ROLE-linux-$ARCH.tar.gz"
+
+if [[ ${1:-} == "--pull" ]]; then
+  docker image rm "$IMAGE" >/dev/null 2>&1 || true
+  shift
+elif [[ ${1:-} == "--build" ]]; then
+  CYNAPSA_DEMO_ORCHESTRATOR_IMAGE="$IMAGE" "$ROOT/build.sh"
+  shift
 fi
-chmod 600 "$gemini_file"
+[[ $# -eq 0 ]] || { echo "usage: ./run.sh [--pull|--build]" >&2; exit 64; }
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  command -v curl >/dev/null || { echo "curl is required to download the orchestrator image." >&2; exit 69; }
+  image_archive=$(mktemp "${TMPDIR:-/tmp}/cynapsa-demo-$ROLE.XXXXXX.tar.gz")
+  trap 'rm -f -- "$image_archive"' EXIT INT TERM
+  echo "Downloading Cynapsa demo $ROLE $VERSION for $ARCH..."
+  curl --fail --location --retry 3 --output "$image_archive" "$ASSET_URL"
+  if command -v sha256sum >/dev/null; then
+    actual_sha256=$(sha256sum "$image_archive" | awk '{print $1}')
+  else
+    actual_sha256=$(shasum -a 256 "$image_archive" | awk '{print $1}')
+  fi
+  [[ "$actual_sha256" == "$EXPECTED_SHA256" ]] || {
+    echo "Orchestrator image checksum verification failed." >&2
+    exit 65
+  }
+  gzip -dc "$image_archive" | docker load >/dev/null
+  rm -f -- "$image_archive"
+  trap - EXIT INT TERM
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+    echo "Downloaded archive did not contain $IMAGE." >&2
+    exit 70
+  }
+fi
 
 docker volume create "$VOLUME" >/dev/null
-mounts=(
+docker_args=(
+  --rm
+  -it
   --mount "type=volume,src=$VOLUME,dst=/var/lib/cynapsa"
-  --mount "type=bind,src=$gemini_file,dst=/run/secrets/gemini_api_key,readonly"
 )
-[[ -z ${DEMO_MESH_ID:-} ]] || mounts+=(--env DEMO_MESH_ID)
-[[ -z ${DEMO_MAPS_AGENT_ID:-} ]] || mounts+=(--env DEMO_MAPS_AGENT_ID)
-[[ -z ${DEMO_GEMINI_MODEL:-} ]] || mounts+=(--env DEMO_GEMINI_MODEL)
-token_file=
-cleanup() { [[ -z "$token_file" || ! -f "$token_file" ]] || rm -f -- "$token_file"; }
-trap cleanup EXIT INT TERM
-if ! docker run --rm --entrypoint sh --mount "type=volume,src=$VOLUME,dst=/state" \
-  "$IMAGE" -c 'for p in /state/profile-v2-*.state; do [ -f "$p" ] && exit 0; done; exit 1'
-then
-  token=${CYNAPSA_TOKEN:-}
-  if [[ -z "$token" ]]; then read -r -s -p "Cynapsa enrollment token: " token; printf '\n'; fi
-  [[ -n "$token" ]] || { echo "Enrollment token cannot be empty." >&2; exit 64; }
-  token_file=$(mktemp "$ROOT/.private/enrollment-token.XXXXXX")
-  chmod 600 "$token_file"
-  printf '%s' "$token" > "$token_file"
-  unset token CYNAPSA_TOKEN
-  mounts+=(--mount "type=bind,src=$token_file,dst=/run/secrets/enrollment_token,readonly")
-fi
-docker run --rm -it "${mounts[@]}" "$IMAGE"
+[[ ! -f "$ENV_FILE" ]] || docker_args+=(--env-file "$ENV_FILE")
+for variable in CYNAPSA_TOKEN GEMINI_API_KEY DEMO_MESH_ID DEMO_MAPS_AGENT_ID DEMO_GEMINI_MODEL; do
+  [[ -z ${!variable:-} ]] || docker_args+=(--env "$variable")
+done
+
+docker run "${docker_args[@]}" "$IMAGE"

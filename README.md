@@ -12,68 +12,56 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
                                                                    +--> Google Places API
 ```
 
-Every directory is self-contained. It has its own application source,
+Every directory is independently runnable. It has its own application source,
 configuration, Dockerfile, entrypoint, dependencies, documentation, and
-`run.sh`. No credentials, enrollment tokens, or Cynapsa installation profiles
-are committed to this repository.
+`run.sh`. The runner downloads a prebuilt ARM64 or AMD64 container image, so a
+user does not need the SDK or Go Core source. No credentials, enrollment tokens,
+or Cynapsa installation profiles are committed to this repository.
 
-## Run only the laptop client
+## Run one identity
 
-Install Docker, then clone just the client directory with Git sparse checkout:
-
-```sh
-git clone --filter=blob:none --sparse https://github.com/Cynapsa/cynapsa-demo.git
-cd cynapsa-demo
-git sparse-checkout set client
-cd client
-./run.sh
-```
-
-The first run downloads a public, secret-free client image archive from this
-repository's release and securely prompts for the enrollment
-token of a client identity in the `cynapsa-demo` mesh. The token is mounted for
-that enrollment only and its temporary file is removed when the process exits.
-The encrypted Cynapsa installation profile remains in a dedicated Docker volume,
-so later runs are simply:
+Clone the repository, enter the identity directory, and create its ignored
+environment file. For example, to run the client:
 
 ```sh
+git clone https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo/client
+cp .env.example .env
+# Edit .env and replace the placeholders.
 ./run.sh
 ```
 
-The checked-in client configuration already targets the deployed demo
-orchestrator. See [`client/README.md`](client/README.md) for configuration and
-reset instructions.
+The first run downloads and verifies the correct container image for the local
+Docker architecture. `CYNAPSA_TOKEN` enrolls a new installation only when its
+state volume has no saved profile. The encrypted profile is retained in that
+identity's Docker volume, so the token can be removed from `.env` afterward.
 
-## Run an agent locally
+Use the same flow in [`orchestrator/`](orchestrator/) and [`maps/`](maps/).
+Their `.env.example` files list the API credentials they require on every run.
 
-The maps and orchestrator agents are currently deployed as GCP Cloud Run worker
-pools. They can also be run locally from their own directories:
+## Portable images
 
-```sh
-cd maps && ./run.sh
-cd orchestrator && ./run.sh
-```
+The GitHub release contains separate ARM64 and AMD64 images for every identity,
+including the compatible Python SDK and Go Core. Each `run.sh` downloads the
+right archive automatically. The image itself contains no credentials or
+installation state; those are supplied when the container starts.
 
-Each runner prompts for any missing API keys and for a Cynapsa enrollment token
-when its persistent Docker volume has no installation profile. Do not run a
-local copy with the same installation profile while its cloud copy is active.
+Use a different named state volume to run the same image with another
+enrollment token. This keeps the installations isolated instead of deleting or
+overwriting the first one. Each identity's README contains an example.
 
-## Source versions
+## Maintainer builds
 
-The release contains ARM64 and AMD64 client images with the compatible SDK and
-Go Core but no secret or installation state, so client users do not need access
-to the private source repositories or a container registry. Maintainers can use
-each directory's `build.sh` with local SDK
-and Go Core checkouts. Override `CYNAPSA_SDK_ROOT` and `CYNAPSA_CORE_ROOT` when
-those checkouts are not below the default paths under `$HOME/git`.
+Maintainers can use `./run.sh --build` or `./build.sh` with local SDK and Go
+Core checkouts. Override `CYNAPSA_SDK_ROOT`, `CYNAPSA_CORE_ROOT`, and
+`CYNAPSA_DEMO_PLATFORM` when needed.
 
 ## Security
 
-- Local secrets are written only below each identity's ignored `.private/`
-  directory with mode `0600`.
+- `.env` files are ignored by Git and must never be committed.
 - Encrypted Core state is held in a separate Docker volume for each identity.
-- Images contain no API keys, tokens, or installation state.
-- Enrollment tokens are never passed as Docker command-line environment values.
-- Revoke unused installations and rotate any credential that may have been
-  exposed outside its intended environment.
+- Images contain no API keys, enrollment tokens, or installation state.
+- Environment variables are convenient for demos; production platforms should
+  inject the same values from their managed secret store.
+- Revoke unused installations and rotate credentials that may have been
+  exposed outside their intended environment.

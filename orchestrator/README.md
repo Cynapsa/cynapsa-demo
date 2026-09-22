@@ -3,16 +3,31 @@
 This identity accepts `/ask` RPCs from the demo client. Gemini decides whether
 to answer directly or call the maps identity over Cynapsa.
 
-Run locally with Docker:
+The directory is independently runnable. Docker downloads the published image;
+the SDK and Go Core source repositories are not required.
+
+## Run
 
 ```sh
+cp .env.example .env
+# Set CYNAPSA_TOKEN and GEMINI_API_KEY in .env.
 ./run.sh
 ```
 
-The first run prompts for a Gemini API key and a portal enrollment token. The
-API key is stored in ignored `.private/gemini_api_key` with mode `0600`; the
-one-time enrollment token is deleted after the process exits. Encrypted Cynapsa
-state persists in the `cynapsa-demo-orchestrator-state` Docker volume.
+The credentials are runtime environment variables and are never stored in the
+image. Encrypted Cynapsa state persists in the
+`cynapsa-demo-orchestrator-state` Docker volume. Remove `CYNAPSA_TOKEN` from
+`.env` after enrollment; `GEMINI_API_KEY` is required on every run.
+
+Use `./run.sh --pull` to replace the local image with the published version.
+
+## Test another identity
+
+```sh
+CYNAPSA_TOKEN='another-enrollment-token' \
+  CYNAPSA_DEMO_ORCHESTRATOR_VOLUME=cynapsa-demo-orchestrator-test-2 \
+  ./run.sh
+```
 
 The deployed Cloud Run worker pool is named `cynapsa-demo-orchestrator` in
 project `aztm-amesh`, region `us-central1`. Its secrets and installation state

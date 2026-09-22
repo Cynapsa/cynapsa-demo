@@ -30,6 +30,5 @@ precedence over the value in `.env`.
 ./run.sh --build  # maintainer build using local SDK/Core checkouts
 ```
 
-The checked-in `config.json` targets the deployed demo orchestrator. Override
-its values with `DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` in the shell or
-`.env`.
+`DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` are required. This keeps the
+same image reusable for any mesh and orchestrator identity.

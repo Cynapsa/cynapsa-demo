@@ -119,6 +119,7 @@ async def answer_prompt(
 
 
 async def serve(*, enroll: bool) -> None:
+    target = maps_agent_id()
     model_client = genai.Client(
         api_key=gemini_key(), http_options=types.HttpOptions(timeout=20_000)
     )
@@ -130,7 +131,7 @@ async def serve(*, enroll: bool) -> None:
                 try:
                     body = AskBody.model_validate(request.json())
                     return await answer_prompt(
-                        body.prompt, client=model_client, session=session, target=maps_agent_id()
+                        body.prompt, client=model_client, session=session, target=target
                     )
                 except (ValueError, UnicodeError, ValidationError):
                     raise cynapsa.RPCException(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import stat
 from pathlib import Path
@@ -32,10 +31,10 @@ def _secure_file(name: str) -> str:
     return value
 
 
-def _settings() -> dict:
-    value = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise RuntimeError("config.json must contain a JSON object")
+def _required_environment(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
     return value
 
 
@@ -52,20 +51,16 @@ def prepare_runtime() -> None:
 
 
 def orchestrator_agent_id() -> str:
-    value = os.environ.get(
-        "DEMO_ORCHESTRATOR_AGENT_ID", _settings().get("orchestrator_agent_id")
-    )
-    if not isinstance(value, str) or "@" not in value or "/" in value:
-        raise RuntimeError("orchestrator_agent_id must be a canonical bare JID")
-    return value.strip()
+    value = _required_environment("DEMO_ORCHESTRATOR_AGENT_ID")
+    if "@" not in value or "/" in value:
+        raise RuntimeError("DEMO_ORCHESTRATOR_AGENT_ID must be a canonical bare JID")
+    return value
 
 
 def connection_options(*, enroll: bool) -> dict[str, str | int]:
-    mesh_id = os.environ.get("DEMO_MESH_ID", _settings().get("mesh_id"))
-    if not isinstance(mesh_id, str) or not mesh_id.strip():
-        raise RuntimeError("mesh_id is missing")
+    mesh_id = _required_environment("DEMO_MESH_ID")
     options: dict[str, str | int] = {
-        "mesh_id": mesh_id.strip(),
+        "mesh_id": mesh_id,
         "profile_id": "demo-client",
         "rpc_timeout_ms": 110_000,
     }

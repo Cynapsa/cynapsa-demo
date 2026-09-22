@@ -15,6 +15,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Cynapsa demo client")
     parser.add_argument("--enroll", action="store_true")
     args = parser.parse_args()
+    target = orchestrator_agent_id()
 
     with cynapsa.connect(**connection_options(enroll=args.enroll)) as session:
         print(f"demo-client ready as {session.agent_id}", flush=True)
@@ -30,7 +31,7 @@ def main() -> None:
                 continue
             try:
                 response = session.request(
-                    orchestrator_agent_id(),
+                    target,
                     {"prompt": prompt},
                     path="/ask",
                     ttl_ms=140_000,

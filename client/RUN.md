@@ -25,7 +25,9 @@ cd client
 
 ## First run
 
-Create an ignored environment file and replace the token placeholder:
+Create an ignored environment file and replace all placeholders. The mesh ID
+and orchestrator bare agent ID are required on every run; the enrollment token
+is required only for a new state volume:
 
 ```sh
 cp .env.example .env

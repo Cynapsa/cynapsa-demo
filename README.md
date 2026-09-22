@@ -35,9 +35,14 @@ cp .env.example .env
 ```
 
 The first run downloads and verifies the correct container image for the local
-Docker architecture. `CYNAPSA_TOKEN` enrolls a new installation only when its
-state volume has no saved profile. The encrypted profile is retained in that
-identity's Docker volume, so the token can be removed from `.env` afterward.
+Docker architecture. Every identity requires `DEMO_MESH_ID`; the client and
+orchestrator also require their destination agent ID. `CYNAPSA_TOKEN` enrolls a
+new installation only when its state volume has no saved profile. The encrypted
+profile is retained in that identity's Docker volume, so the token can be
+removed from `.env` afterward.
+
+An entity's own agent identity is always resolved by Enrollment and stored by
+Go Core. It is never accepted as local configuration.
 
 Use the same flow in [`orchestrator/`](orchestrator/) and [`maps/`](maps/).
 Their `.env.example` files list the API credentials they require on every run.

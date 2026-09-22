@@ -10,14 +10,14 @@ the SDK and Go Core source repositories are not required.
 
 ```sh
 cp .env.example .env
-# Set CYNAPSA_TOKEN, GEMINI_API_KEY, and GOOGLE_MAPS_API_KEY in .env.
+# Set every required value in .env.
 ./run.sh
 ```
 
 The credentials are runtime environment variables and are never stored in the
 image. Encrypted Cynapsa state persists in the `cynapsa-demo-maps-state` Docker
 volume. Remove `CYNAPSA_TOKEN` from `.env` after enrollment; both API keys are
-required on every run.
+required on every run. `DEMO_MESH_ID` is also required on every run.
 
 Use `./run.sh --pull` to replace the local image with the published version.
 

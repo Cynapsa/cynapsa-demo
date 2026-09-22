@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-VERSION=0.2.0
+VERSION=0.3.0
 ROLE=client
 
 command -v docker >/dev/null || { echo "Docker is required." >&2; exit 69; }
@@ -10,11 +10,11 @@ docker info >/dev/null 2>&1 || { echo "Docker is not running." >&2; exit 69; }
 case "$(docker version --format '{{.Server.Arch}}')" in
   arm64|aarch64)
     ARCH=arm64
-    EXPECTED_SHA256=1ad022aa7e69dfb0df59f4ca0846daa9da8bdad393b7b8f059ce23ef984e2260
+    EXPECTED_SHA256=aa5aeed09526f880d4cae3ed22941acee180d28afa950724603318e0d8d4b813
     ;;
   amd64|x86_64)
     ARCH=amd64
-    EXPECTED_SHA256=d5091abfffa9eb40c31842195784451b53a50009d062fe78d9f342dd929cc55d
+    EXPECTED_SHA256=83e76c2581b70e171d9a2903e32ada456a02c990750b50fc18ada488a460adad
     ;;
   *) echo "Unsupported Docker architecture." >&2; exit 69 ;;
 esac

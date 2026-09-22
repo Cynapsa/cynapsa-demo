@@ -33,12 +33,17 @@ Enrollment tokens are one-time credentials. After successful enrollment, each
 identity uses the encrypted profile in its Docker volume and no longer needs the
 token.
 
+Do not configure an entity's own agent ID. Enrollment resolves that identity
+and Go Core stores it in the profile. `DEMO_ORCHESTRATOR_AGENT_ID` and
+`DEMO_MAPS_AGENT_ID` are destination IDs used by the application for routing;
+they are not local identity overrides.
+
 ## Choose a run mode
 
 ### Client against the deployed demo
 
-The checked-in client configuration already targets the deployed orchestrator.
-Only run the client and give it a client enrollment token.
+Only run the client. Configure its mesh ID and the deployed orchestrator's bare
+agent ID together with the client enrollment token.
 
 ### All three entities locally
 
@@ -63,11 +68,12 @@ Set these values in `maps/.env`:
 
 ```dotenv
 CYNAPSA_TOKEN=replace-with-maps-enrollment-token
+DEMO_MESH_ID=replace-with-mesh-id
 GEMINI_API_KEY=replace-with-gemini-api-key
 GOOGLE_MAPS_API_KEY=replace-with-google-maps-api-key
 ```
 
-`DEMO_MESH_ID` and `DEMO_GEMINI_MODEL` are optional overrides. Start the agent:
+`DEMO_GEMINI_MODEL` is an optional override. Start the agent:
 
 ```sh
 ./run.sh
@@ -97,16 +103,12 @@ Set these values in `orchestrator/.env`:
 
 ```dotenv
 CYNAPSA_TOKEN=replace-with-orchestrator-enrollment-token
+DEMO_MESH_ID=replace-with-mesh-id
+DEMO_MAPS_AGENT_ID=agent-id@connect.cynapsa.com
 GEMINI_API_KEY=replace-with-gemini-api-key
 ```
 
-When using a different maps identity, also set its canonical bare agent ID:
-
-```dotenv
-DEMO_MAPS_AGENT_ID=agent-id@connect.cynapsa.com
-```
-
-`DEMO_MESH_ID` and `DEMO_GEMINI_MODEL` are optional overrides. Start the agent:
+`DEMO_GEMINI_MODEL` is an optional override. Start the agent:
 
 ```sh
 ./run.sh
@@ -136,16 +138,11 @@ Set this value in `client/.env`:
 
 ```dotenv
 CYNAPSA_TOKEN=replace-with-client-enrollment-token
-```
-
-When using a different orchestrator identity, also set its canonical bare agent
-ID:
-
-```dotenv
+DEMO_MESH_ID=replace-with-mesh-id
 DEMO_ORCHESTRATOR_AGENT_ID=agent-id@connect.cynapsa.com
 ```
 
-`DEMO_MESH_ID` is an optional override. Start the client:
+Start the client:
 
 ```sh
 ./run.sh

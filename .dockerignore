@@ -1,0 +1,11 @@
+**/.private
+**/.state
+.git
+.gcloud-venv
+.venv
+build
+state
+.pytest_cache
+__pycache__
+*.py[cod]
+.DS_Store

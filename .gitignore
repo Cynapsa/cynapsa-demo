@@ -1,0 +1,11 @@
+**/.private/
+**/.state/
+**/__pycache__/
+**/.pytest_cache/
+*.py[cod]
+.DS_Store
+.gcloud-venv/
+.venv/
+build/
+state/
+*.tar

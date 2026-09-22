@@ -36,9 +36,8 @@ mounts=(
   --mount "type=bind,src=$gemini_file,dst=/run/secrets/gemini_api_key,readonly"
   --mount "type=bind,src=$maps_file,dst=/run/secrets/google_maps_api_key,readonly"
 )
-environment=()
-[[ -z ${DEMO_MESH_ID:-} ]] || environment+=(--env DEMO_MESH_ID)
-[[ -z ${DEMO_GEMINI_MODEL:-} ]] || environment+=(--env DEMO_GEMINI_MODEL)
+[[ -z ${DEMO_MESH_ID:-} ]] || mounts+=(--env DEMO_MESH_ID)
+[[ -z ${DEMO_GEMINI_MODEL:-} ]] || mounts+=(--env DEMO_GEMINI_MODEL)
 token_file=
 cleanup() { [[ -z "$token_file" || ! -f "$token_file" ]] || rm -f -- "$token_file"; }
 trap cleanup EXIT INT TERM
@@ -54,4 +53,4 @@ then
   unset token CYNAPSA_TOKEN
   mounts+=(--mount "type=bind,src=$token_file,dst=/run/secrets/enrollment_token,readonly")
 fi
-docker run --rm -it "${mounts[@]}" "${environment[@]}" "$IMAGE"
+docker run --rm -it "${mounts[@]}" "$IMAGE"

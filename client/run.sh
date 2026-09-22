@@ -58,9 +58,8 @@ fi
 
 docker volume create "$VOLUME" >/dev/null
 mounts=(--mount "type=volume,src=$VOLUME,dst=/var/lib/cynapsa")
-environment=()
-[[ -z ${DEMO_MESH_ID:-} ]] || environment+=(--env DEMO_MESH_ID)
-[[ -z ${DEMO_ORCHESTRATOR_AGENT_ID:-} ]] || environment+=(--env DEMO_ORCHESTRATOR_AGENT_ID)
+[[ -z ${DEMO_MESH_ID:-} ]] || mounts+=(--env DEMO_MESH_ID)
+[[ -z ${DEMO_ORCHESTRATOR_AGENT_ID:-} ]] || mounts+=(--env DEMO_ORCHESTRATOR_AGENT_ID)
 token_file=
 cleanup() {
   if [[ -n "$token_file" && -f "$token_file" ]]; then
@@ -88,4 +87,4 @@ then
   mounts+=(--mount "type=bind,src=$token_file,dst=/run/secrets/enrollment_token,readonly")
 fi
 
-docker run --rm -it "${mounts[@]}" "${environment[@]}" "$IMAGE"
+docker run --rm -it "${mounts[@]}" "$IMAGE"

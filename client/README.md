@@ -3,6 +3,8 @@
 This directory is a standalone interactive client for the deployed Cynapsa
 demo. Docker is the only local build/runtime prerequisite.
 
+For complete setup and usage instructions, see [RUN.md](RUN.md).
+
 ## First run
 
 Create or select a client agent in the `cynapsa-demo` mesh and generate an

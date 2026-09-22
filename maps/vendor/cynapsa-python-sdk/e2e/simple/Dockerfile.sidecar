@@ -1,0 +1,14 @@
+FROM alpine:3.23
+RUN apk add --no-cache iproute2 iptables openssl socat
+COPY e2e/simple/sidecar-entrypoint.sh /usr/local/bin/cynapsa-sidecar-entrypoint
+COPY e2e/simple/network-probe.sh /usr/local/bin/cynapsa-network-probe
+COPY e2e/simple/network-probe-receiver.sh /usr/local/bin/cynapsa-network-probe-receiver
+COPY e2e/simple/network-probe-tcp-handler.sh /usr/local/bin/cynapsa-network-probe-tcp-handler
+COPY e2e/simple/network-probe-udp-handler.sh /usr/local/bin/cynapsa-network-probe-udp-handler
+RUN chmod 0555 \
+    /usr/local/bin/cynapsa-sidecar-entrypoint \
+    /usr/local/bin/cynapsa-network-probe \
+    /usr/local/bin/cynapsa-network-probe-receiver \
+    /usr/local/bin/cynapsa-network-probe-tcp-handler \
+    /usr/local/bin/cynapsa-network-probe-udp-handler
+ENTRYPOINT ["/usr/local/bin/cynapsa-sidecar-entrypoint"]

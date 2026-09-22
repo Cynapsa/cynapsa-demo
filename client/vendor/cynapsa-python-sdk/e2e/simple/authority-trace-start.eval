@@ -1,0 +1,51 @@
+case whereis(cynapsa_e2e_authority_trace) of
+    undefined -> ok;
+    Existing ->
+        catch unregister(cynapsa_e2e_authority_trace),
+        exit(Existing, kill)
+end,
+Keys = [authority_snapshot, resume_context_copy],
+Parent = self(),
+Tracer = spawn(
+  fun() ->
+          _ = ets:new(cynapsa_e2e_authority_trace_counts,
+                      [named_table, public, set]),
+          lists:foreach(
+            fun(Key) ->
+                    ets:insert(cynapsa_e2e_authority_trace_counts, {Key, 0})
+            end, Keys),
+          Parent ! {self(), ready},
+          TraceLoop =
+            fun Loop() ->
+                    receive
+                        {trace, _Pid, call,
+                         {mod_cynapsa_mesh, process_group_iq, _Args}} ->
+                            ets:update_counter(
+                              cynapsa_e2e_authority_trace_counts,
+                              authority_snapshot, 1),
+                            Loop();
+                        {trace, _Pid, call,
+                         {mod_cynapsa_mesh, c2s_copy_session, _Args}} ->
+                            ets:update_counter(
+                              cynapsa_e2e_authority_trace_counts,
+                              resume_context_copy, 1),
+                            Loop();
+                        _ -> Loop()
+                    end
+            end,
+          TraceLoop()
+  end),
+receive
+    {Tracer, ready} -> ok
+after 5000 ->
+    exit(authority_trace_owner_start_timeout)
+end,
+true = register(cynapsa_e2e_authority_trace, Tracer),
+1 = erlang:trace_pattern(
+      {mod_cynapsa_mesh, process_group_iq, 1}, true, [local]),
+1 = erlang:trace_pattern(
+      {mod_cynapsa_mesh, c2s_copy_session, 2}, true, [local]),
+_ = erlang:trace(all, true, [call, {tracer, Tracer}]),
+_ = erlang:trace(new, true, [call, {tracer, Tracer}]),
+io:format("ready~n"),
+ok.

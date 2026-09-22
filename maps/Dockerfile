@@ -4,14 +4,14 @@ ARG GO_IMAGE=golang:1.26-bookworm
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 FROM ${GO_IMAGE} AS core-builder
 WORKDIR /src/core
-COPY --from=cynapsa_core . .
+COPY vendor/cynapsagocore/ ./
 RUN GOTOOLCHAIN=auto CGO_ENABLED=1 go build -trimpath -buildmode=c-shared \
     -o /out/libcynapsacore.so ./cmd/cynapsacore-shared
 
 FROM ${PYTHON_IMAGE} AS sdk-builder
 WORKDIR /src/sdk
 RUN python -m pip install --no-cache-dir build
-COPY --from=cynapsa_sdk . .
+COPY vendor/cynapsa-python-sdk/ ./
 RUN python -m build --wheel --outdir /out
 
 FROM ${PYTHON_IMAGE} AS runtime

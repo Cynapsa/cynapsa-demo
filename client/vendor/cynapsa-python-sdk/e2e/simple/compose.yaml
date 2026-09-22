@@ -1,0 +1,691 @@
+name: cynapsa-simple-e2e
+
+x-sidecar: &sidecar
+  build:
+    context: ../..
+    dockerfile: e2e/simple/Dockerfile.sidecar
+  image: cynapsa-simple-e2e-sidecar:${CYNAPSA_E2E_IMAGE_TAG:-local}
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  sysctls:
+    net.ipv4.tcp_retries2: "1"
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=32m
+  volumes:
+    - ${CYNAPSA_E2E_AUTH_STATE:?set CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+  # Containers joined with `network_mode: service:<sidecar>` inherit the
+  # sidecar's hosts file. Keep routed test names here because Docker rejects
+  # --add-host on the joined container itself.
+  extra_hosts:
+    - auth0.cynapsa.test:10.240.110.2
+    - enrollment.cynapsa.com:10.240.130.2
+    - management.cynapsa.test:10.240.120.2
+    - mesh.test:10.240.70.2
+  depends_on:
+    router:
+      condition: service_healthy
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >
+        ! ip -4 -o address show dev eth0 scope global | grep -q . &&
+        ! ip -4 route show dev eth0 | grep -q . &&
+        ip -d link show cynapsa-lan | grep -Fq "vlan protocol 802.1Q id $${CYNAPSA_VLAN_ID} " &&
+        ip -4 -o address show dev cynapsa-lan scope global |
+          awk '{print $$4}' | grep -Fxq "$${CYNAPSA_LAN_ADDRESS}" &&
+        ip route show 10.240.0.0/16 |
+          grep -Fq "via $${CYNAPSA_LAN_GATEWAY} dev cynapsa-lan" &&
+        test "$$(sysctl -n net.ipv4.tcp_retries2)" = 1 &&
+        ! iptables -t nat -S | grep -Eq '(MASQUERADE|SNAT|DNAT)'
+    interval: 2s
+    timeout: 2s
+    retries: 20
+  networks:
+    trunk:
+
+x-agent: &agent
+  build:
+    context: ../..
+    dockerfile: e2e/simple/Dockerfile.agent
+    additional_contexts:
+      core: ${CYNAPSA_GO_CORE_PATH:?set CYNAPSA_GO_CORE_PATH}
+  image: cynapsa-simple-e2e-agent:${CYNAPSA_E2E_IMAGE_TAG:-local}
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001
+  env_file:
+    - path: ${CYNAPSA_E2E_AUTH_STATE:?set CYNAPSA_E2E_AUTH_STATE}/sdk-e2e.env
+      required: false
+  environment: &agent-environment
+    CYNAPSA_STATE_DIRECTORY: /var/lib/cynapsa
+    CYNAPSA_ENROLLMENT_TOKEN_FILE: /run/cynapsa/auth/token
+    SSL_CERT_FILE: /ca.pem
+  depends_on:
+    state-init:
+      condition: service_completed_successfully
+    ejabberd:
+      condition: service_healthy
+
+x-fault-campaign-client-environment: &fault-campaign-client-environment
+  CYNAPSA_E2E_RPC_TIMEOUT_MS: "60000"
+
+x-server: &server
+  <<: *agent
+  restart: "no"
+  healthcheck:
+    test: [CMD-SHELL, "test -f /tmp/cynapsa-ready"]
+    interval: 2s
+    timeout: 1s
+    retries: 45
+    start_period: 5s
+
+x-service-hardening: &service-hardening
+  restart: "no"
+  security_opt: [no-new-privileges:true]
+
+services:
+  # Bootstrap is intentionally staged. Enable only the provision profile for
+  # the one-shot controller. After it exits successfully, omit that profile,
+  # pass /state/sdk-e2e.env with --env-file, and enable workload/clients.
+  router:
+    build:
+      context: ../..
+      dockerfile: e2e/simple/Dockerfile.router
+    image: cynapsa-simple-e2e-router:${CYNAPSA_E2E_IMAGE_TAG:-local}
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.send_redirects: "0"
+      net.ipv4.conf.default.send_redirects: "0"
+    healthcheck:
+      test: [CMD-SHELL, "test \"$$(cat /proc/sys/net/ipv4/ip_forward)\" = 1 && ! ip -4 -o address show dev eth0 scope global | grep -q . && ! ip -4 route show dev eth0 | grep -q . && test \"$$(ip -d link show type vlan | grep -c '^[0-9]')\" = 14 && test \"$$(sysctl -n net.ipv4.conf.all.send_redirects)\" = 0 && ! iptables -t nat -S | grep -Eq '(MASQUERADE|SNAT|DNAT)'"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.2"}
+
+  native-sync-client-net:
+    <<: *sidecar
+    profiles: [clients]
+    environment:
+      CYNAPSA_VLAN_ID: 101
+      CYNAPSA_LAN_ADDRESS: 10.240.10.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.10.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.11"}
+
+  native-async-client-net:
+    <<: *sidecar
+    profiles: [clients]
+    environment:
+      CYNAPSA_VLAN_ID: 102
+      CYNAPSA_LAN_ADDRESS: 10.240.20.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.20.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.12"}
+
+  monkey-sync-client-net:
+    <<: *sidecar
+    profiles: [clients]
+    environment:
+      CYNAPSA_VLAN_ID: 103
+      CYNAPSA_LAN_ADDRESS: 10.240.30.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.30.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.13"}
+
+  monkey-async-client-net:
+    <<: *sidecar
+    profiles: [clients]
+    environment:
+      CYNAPSA_VLAN_ID: 104
+      CYNAPSA_LAN_ADDRESS: 10.240.40.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.40.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.14"}
+
+  native-server-net:
+    <<: *sidecar
+    profiles: [workload]
+    environment:
+      CYNAPSA_VLAN_ID: 105
+      CYNAPSA_LAN_ADDRESS: 10.240.50.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.50.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.15"}
+
+  monkey-server-net:
+    <<: *sidecar
+    profiles: [workload]
+    environment:
+      CYNAPSA_VLAN_ID: 106
+      CYNAPSA_LAN_ADDRESS: 10.240.60.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.60.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.16"}
+
+  ejabberd-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 107
+      CYNAPSA_LAN_ADDRESS: 10.240.70.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.70.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.17"}
+
+  stun-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 108
+      CYNAPSA_LAN_ADDRESS: 10.240.80.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.80.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.18"}
+
+  turn-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 109
+      CYNAPSA_LAN_ADDRESS: 10.240.90.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.90.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.19"}
+
+  postgres-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 110
+      CYNAPSA_LAN_ADDRESS: 10.240.100.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.100.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.20"}
+
+  auth0-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 111
+      CYNAPSA_LAN_ADDRESS: 10.240.110.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.110.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.21"}
+
+  management-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 112
+      CYNAPSA_LAN_ADDRESS: 10.240.120.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.120.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.22"}
+
+  enrollment-net:
+    <<: *sidecar
+    environment:
+      CYNAPSA_VLAN_ID: 113
+      CYNAPSA_LAN_ADDRESS: 10.240.130.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.130.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.23"}
+
+  controller-net:
+    <<: *sidecar
+    profiles: [provision]
+    environment:
+      CYNAPSA_VLAN_ID: 114
+      CYNAPSA_LAN_ADDRESS: 10.240.140.2/24
+      CYNAPSA_LAN_GATEWAY: 10.240.140.1
+    networks:
+      trunk: {ipv4_address: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.24"}
+
+  postgres:
+    <<: *service-hardening
+    image: postgres@sha256:5d1d70e254e3c5d7d76847a9deebb18478cd518df37abf6b278d4bdb1fe5d96c
+    network_mode: service:postgres-net
+    environment:
+      POSTGRES_DB: cynapsa
+      POSTGRES_USER: cynapsa
+      POSTGRES_PASSWORD_FILE: /run/cynapsa/postgres-password
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/postgres-password:/run/cynapsa/postgres-password:ro
+      - postgres-data:/var/lib/postgresql/data
+    depends_on:
+      postgres-net:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U cynapsa -d cynapsa"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  auth0:
+    <<: *service-hardening
+    build:
+      context: ${CYNAPSA_TESTS_PATH:?set CYNAPSA_TESTS_PATH}/services/auth0-emulator
+    network_mode: service:auth0-net
+    read_only: true
+    entrypoint: ["/harness/auth0-entrypoint.sh"]
+    environment:
+      AUTH0_EMULATOR_HOST: auth0.cynapsa.test:8443
+      AUTH0_EMULATOR_ISSUER: https://auth0.cynapsa.test:8443/
+      AUTH0_EMULATOR_CLIENT_ID: cynapsa-test-client
+      AUTH0_EMULATOR_API_AUDIENCE: https://api.cynapsa.test
+      AUTH0_EMULATOR_ADDITIONAL_AUDIENCES: https://mesh.test
+      AUTH0_EMULATOR_SIGNING_KEY_PATH: /run/cynapsa/auth0-signing-key.pem
+      AUTH0_EMULATOR_TLS_CERT_PATH: /run/cynapsa/tls.crt
+      AUTH0_EMULATOR_TLS_KEY_PATH: /run/cynapsa/tls.key
+      AUTH0_EMULATOR_PORT: "8443"
+    volumes:
+      - ./auth0-entrypoint.sh:/harness/auth0-entrypoint.sh:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/auth0-client-secret:/run/cynapsa/auth0-client-secret:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/auth0-bootstrap-secret:/run/cynapsa/auth0-bootstrap-secret:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/auth0-signing-key.pem:/run/cynapsa/auth0-signing-key.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/auth0.crt:/run/cynapsa/tls.crt:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/auth0.key:/run/cynapsa/tls.key:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001
+    depends_on:
+      auth0-net:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import ssl,urllib.request; urllib.request.urlopen('https://127.0.0.1:8443/healthz',context=ssl._create_unverified_context(),timeout=2).read()"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  ejabberd:
+    <<: *service-hardening
+    build:
+      context: ${CYNAPSA_EJABBERD_PATH:?set CYNAPSA_EJABBERD_PATH}
+      dockerfile: Dockerfile
+    network_mode: service:ejabberd-net
+    cap_drop: [ALL]
+    # The pinned upstream beam.smp carries this file capability. It must remain
+    # in the bounding set or Linux rejects the executable before Erlang starts.
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    entrypoint: ["/harness/ejabberd-entrypoint.sh"]
+    environment:
+      ERL_CRASH_DUMP: /dev/null
+    volumes:
+      - ./ejabberd-entrypoint.sh:/harness/ejabberd-entrypoint.sh:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/config/ejabberd.yml:/opt/ejabberd/conf/ejabberd.yml:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ejabberd.crt:/opt/ejabberd/conf/certs/fullchain.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ejabberd.key:/opt/ejabberd/conf/certs/privkey.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/public/auth0.jwks:/opt/ejabberd/conf/auth0.jwks:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/ejabberd-api-password:/run/cynapsa/ejabberd-api-password:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/erlang-cookie:/opt/ejabberd/.erlang.cookie:ro
+      - ejabberd-data:/opt/ejabberd/database
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=9000,gid=9000
+      - /opt/ejabberd/logs:rw,noexec,nosuid,nodev,size=32m,uid=9000,gid=9000
+      - /opt/ejabberd/upload:rw,noexec,nosuid,nodev,size=192m,uid=9000,gid=9000
+    depends_on:
+      ejabberd-net:
+        condition: service_healthy
+      stun:
+        condition: service_healthy
+      turn:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "/opt/ejabberd/bin/ejabberdctl status >/dev/null 2>&1 && /opt/ejabberd/bin/ejabberdctl cynapsa_mesh_ready mesh.test >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 4s
+      retries: 45
+      start_period: 8s
+
+  management:
+    <<: *service-hardening
+    build:
+      context: ${CYNAPSA_MANAGEMENT_PATH:?set CYNAPSA_MANAGEMENT_PATH}/backend
+      dockerfile: Dockerfile
+    network_mode: service:management-net
+    read_only: true
+    entrypoint: ["/harness/management-entrypoint.sh"]
+    environment:
+      AUTH0_DOMAIN: auth0.cynapsa.test:8443
+      AUTH0_API_AUDIENCE: https://api.cynapsa.test
+      AUTH0_M2M_CLIENT_ID: cynapsa-test-client
+      AUTH0_SPA_CLIENT_ID: cynapsa-test-spa
+      RUNTIME_TOKEN_ISSUER_MODE: password
+      DEVICE_DOMAIN: mesh.test
+      DEVICE_IDENTITY_DOMAIN: mesh.test
+      XMPP_SERVER_DOMAIN: mesh.test
+      XMPP_CLIENT_HOST: mesh.test
+      XMPP_CLIENT_PORT: "5222"
+      TENANT_DOMAIN_SUFFIX: cynapsa.test
+      EJABBERD_URL: https://mesh.test:5443
+      EJABBERD_ADMIN_USER: admin@mesh.test
+      EJABBERD_MESH_API_MODE: cynapsa
+      SSL_CERT_FILE: /run/cynapsa/ca.pem
+      PORT: "8443"
+    volumes:
+      - ./management-entrypoint.sh:/harness/management-entrypoint.sh:ro
+      - ${CYNAPSA_TESTS_PATH}/scripts/management_runtime.py:/harness/management_runtime.py:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/postgres-password:/run/cynapsa/secrets/postgres-password:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/auth0-client-secret-management:/run/cynapsa/secrets/auth0-client-secret:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/management-jwt-secret:/run/cynapsa/secrets/management-jwt-secret:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/enrollment-credential-key:/run/cynapsa/secrets/enrollment-credential-key:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/management-enrollment-service-token:/run/cynapsa/secrets/management-enrollment-service-token:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/ejabberd-api-password-management:/run/cynapsa/secrets/ejabberd-api-password:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/combined-ca.crt:/run/cynapsa/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/management.crt:/run/cynapsa/tls.crt:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/management.key:/run/cynapsa/tls.key:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    depends_on:
+      management-net:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      auth0:
+        condition: service_healthy
+      ejabberd:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import ssl,urllib.request; urllib.request.urlopen('https://127.0.0.1:8443/healthz',context=ssl._create_unverified_context(),timeout=2).read()"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  enrollment:
+    <<: *service-hardening
+    build:
+      context: ${CYNAPSA_ENROLLMENT_PATH:?set CYNAPSA_ENROLLMENT_PATH}
+      dockerfile: Dockerfile
+    network_mode: service:enrollment-net
+    read_only: true
+    entrypoint: ["/harness/enrollment-entrypoint.sh"]
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      MANAGEMENT_BASE_URL: https://management.cynapsa.test:8443
+      SSL_CERT_FILE: /run/cynapsa/ca.pem
+      REQUEST_TIMEOUT_SECONDS: "10"
+      PUBLIC_REQUEST_TIMEOUT_SECONDS: "10"
+      MANAGEMENT_TOTAL_TIMEOUT_SECONDS: "10"
+      PORT: "443"
+    volumes:
+      - ./enrollment-entrypoint.sh:/harness/enrollment-entrypoint.sh:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/secrets/enrollment-management-service-token:/run/cynapsa/secrets/enrollment-management-service-token:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/combined-ca.crt:/run/cynapsa/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/enrollment.crt:/run/cynapsa/tls.crt:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/enrollment.key:/run/cynapsa/tls.key:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    depends_on:
+      enrollment-net:
+        condition: service_healthy
+      management:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import ssl,urllib.request; urllib.request.urlopen('https://127.0.0.1:443/healthz',context=ssl._create_unverified_context(),timeout=2).read()"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  controller:
+    <<: *service-hardening
+    profiles: [provision]
+    image: python@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534
+    network_mode: service:controller-net
+    read_only: true
+    working_dir: /harness
+    entrypoint: [python, /harness/auth_controller.py, --state, /state]
+    environment:
+      SSL_CERT_FILE: /state/certs/ca.crt
+      CYNAPSA_E2E_HOST_UID: ${CYNAPSA_E2E_HOST_UID:?set CYNAPSA_E2E_HOST_UID}
+      CYNAPSA_E2E_HOST_GID: ${CYNAPSA_E2E_HOST_GID:?set CYNAPSA_E2E_HOST_GID}
+    volumes:
+      - ./auth_state.py:/harness/auth_state.py:ro
+      - ./auth_controller.py:/harness/auth_controller.py:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}:/state
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      controller-net:
+        condition: service_healthy
+      auth0:
+        condition: service_healthy
+      management:
+        condition: service_healthy
+      enrollment:
+        condition: service_healthy
+
+  state-init:
+    <<: *service-hardening
+    build:
+      context: ../..
+      dockerfile: e2e/simple/Dockerfile.agent
+      additional_contexts:
+        core: ${CYNAPSA_GO_CORE_PATH:?set CYNAPSA_GO_CORE_PATH}
+    image: cynapsa-simple-e2e-agent:${CYNAPSA_E2E_IMAGE_TAG:-local}
+    user: root
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    read_only: true
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >
+        for path in /state/*; do
+          chown 10001:10001 "$$path";
+          chmod 0700 "$$path";
+        done
+    volumes:
+      - core-native-server-state:/state/native-server
+      - core-monkey-server-state:/state/monkey-server
+      - core-native-sync-client-state:/state/native-sync-client
+      - core-native-async-client-state:/state/native-async-client
+      - core-monkey-sync-client-state:/state/monkey-sync-client
+      - core-monkey-async-client-state:/state/monkey-async-client
+
+  stun:
+    image: coturn/coturn@sha256:aa68aab64a3b929d57fc2924c98ea447bf996cf8dade2508e7b71eaf23f1f14e
+    user: nobody:nogroup
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    network_mode: service:stun-net
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/coturn-stun.conf:/etc/coturn/turnserver.conf:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=65534,gid=65534
+      - /var/lib/turn:rw,noexec,nosuid,nodev,size=8m,uid=65534,gid=65534
+    depends_on:
+      stun-net:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "turnutils_stunclient -p 3478 10.240.80.2 >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 4s
+      retries: 30
+      start_period: 4s
+
+  turn:
+    image: coturn/coturn@sha256:aa68aab64a3b929d57fc2924c98ea447bf996cf8dade2508e7b71eaf23f1f14e
+    user: nobody:nogroup
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    network_mode: service:turn-net
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/coturn-turn.conf:/etc/coturn/turnserver.conf:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=65534,gid=65534
+      - /var/lib/turn:rw,noexec,nosuid,nodev,size=8m,uid=65534,gid=65534
+    depends_on:
+      turn-net:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          test -f /tmp/cynapsa-turn-ready || {
+            secret=$$(awk -F= '$$1 == "static-auth-secret" {print $$2; exit}' /etc/coturn/turnserver.conf) &&
+            test -n "$$secret" &&
+            turnutils_uclient -y -W "$$secret" -m 1 -n 1 -p 3478 10.240.90.2 >/dev/null 2>&1 &&
+            touch /tmp/cynapsa-turn-ready;
+          }
+      interval: 2s
+      timeout: 8s
+      retries: 30
+      start_period: 4s
+
+  native-server:
+    <<: *server
+    profiles: [workload]
+    network_mode: service:native-server-net
+    command: [python, -m, cynapsa_e2e.native_server]
+    environment:
+      <<: *agent-environment
+      CYNAPSA_PROFILE_ID: native-server
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/agents/native-server:/run/cynapsa/auth:ro
+      - core-native-server-state:/var/lib/cynapsa
+    depends_on:
+      native-server-net: {condition: service_healthy}
+      state-init: {condition: service_completed_successfully}
+      ejabberd: {condition: service_healthy}
+
+  monkey-server:
+    <<: *server
+    profiles: [workload]
+    network_mode: service:monkey-server-net
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >
+        exec cynapsa run
+        --token-file /run/cynapsa/auth/token
+        --mesh-id "$${CYNAPSA_MESH_ID}"
+        --profile-id "$${CYNAPSA_PROFILE_ID}"
+        --allow '*' '*'
+        -- uvicorn cynapsa_e2e.monkey_fastapi_server:app
+        --host 127.0.0.1 --port 8000
+    environment:
+      <<: *agent-environment
+      CYNAPSA_PROFILE_ID: monkey-server
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/agents/monkey-server:/run/cynapsa/auth:ro
+      - core-monkey-server-state:/var/lib/cynapsa
+    healthcheck:
+      test: [CMD-SHELL, "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json',timeout=1).read()\""]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+      start_period: 5s
+    depends_on:
+      monkey-server-net: {condition: service_healthy}
+      state-init: {condition: service_completed_successfully}
+      ejabberd: {condition: service_healthy}
+
+  native-sync-client:
+    <<: *agent
+    profiles: [clients]
+    network_mode: service:native-sync-client-net
+    command: [python, -m, cynapsa_e2e.native_sync_client]
+    environment:
+      <<: *agent-environment
+      CYNAPSA_PROFILE_ID: native-sync-client
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/agents/native-sync-client:/run/cynapsa/auth:ro
+      - core-native-sync-client-state:/var/lib/cynapsa
+    depends_on:
+      native-sync-client-net: {condition: service_healthy}
+      state-init: {condition: service_completed_successfully}
+      ejabberd: {condition: service_healthy}
+
+  native-async-client:
+    <<: *agent
+    profiles: [clients]
+    network_mode: service:native-async-client-net
+    command: [python, -m, cynapsa_e2e.native_async_client]
+    environment:
+      <<: [*agent-environment, *fault-campaign-client-environment]
+      CYNAPSA_PROFILE_ID: native-async-client
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/agents/native-async-client:/run/cynapsa/auth:ro
+      - core-native-async-client-state:/var/lib/cynapsa
+    depends_on:
+      native-async-client-net: {condition: service_healthy}
+      state-init: {condition: service_completed_successfully}
+      ejabberd: {condition: service_healthy}
+
+  monkey-sync-client:
+    <<: *agent
+    profiles: [clients]
+    network_mode: service:monkey-sync-client-net
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >
+        exec cynapsa run
+        --token-file /run/cynapsa/auth/token
+        --mesh-id "$${CYNAPSA_MESH_ID}"
+        --profile-id "$${CYNAPSA_PROFILE_ID}"
+        --command-timeout-ms 30000
+        --rpc-timeout-ms 30000
+        --map https://native-server.test "$${CYNAPSA_NATIVE_SERVER_AGENT_ID}" rpc
+        --map https://monkey-server.test "$${CYNAPSA_MONKEY_SERVER_AGENT_ID}" rpc
+        --allow '*' '*'
+        -- python -m cynapsa_e2e.monkey_sync_client
+    environment:
+      <<: *agent-environment
+      CYNAPSA_PROFILE_ID: monkey-sync-client
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/agents/monkey-sync-client:/run/cynapsa/auth:ro
+      - core-monkey-sync-client-state:/var/lib/cynapsa
+    depends_on:
+      monkey-sync-client-net: {condition: service_healthy}
+      state-init: {condition: service_completed_successfully}
+      ejabberd: {condition: service_healthy}
+
+  monkey-async-client:
+    <<: *agent
+    profiles: [clients]
+    network_mode: service:monkey-async-client-net
+    command: [python, -m, cynapsa_e2e.monkey_async_client]
+    environment:
+      <<: [*agent-environment, *fault-campaign-client-environment]
+      CYNAPSA_PROFILE_ID: monkey-async-client
+    volumes:
+      - ${CYNAPSA_E2E_AUTH_STATE}/certs/ca.crt:/ca.pem:ro
+      - ${CYNAPSA_E2E_AUTH_STATE}/agents/monkey-async-client:/run/cynapsa/auth:ro
+      - core-monkey-async-client-state:/var/lib/cynapsa
+    depends_on:
+      monkey-async-client-net: {condition: service_healthy}
+      state-init: {condition: service_completed_successfully}
+      ejabberd: {condition: service_healthy}
+
+networks:
+  trunk:
+    internal: true
+    ipam:
+      config:
+        - subnet: "${CYNAPSA_E2E_TRUNK_PREFIX:-172.31.0}.0/24"
+
+volumes:
+  postgres-data: {}
+  ejabberd-data: {}
+  core-native-server-state: {}
+  core-monkey-server-state: {}
+  core-native-sync-client-state: {}
+  core-native-async-client-state: {}
+  core-monkey-sync-client-state: {}
+  core-monkey-async-client-state: {}

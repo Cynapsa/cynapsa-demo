@@ -14,11 +14,11 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
                                                                    +--> Google Places API
 ```
 
-Every directory is independently runnable. Its `run.sh` downloads and verifies
-the published ARM64 or AMD64 container image when that image is not already
-available locally. The image contains the application, Cynapsa Python SDK, Go
-Core, and Python dependencies. Credentials and installation state are supplied
-at runtime and are not part of the image.
+Every directory is independently runnable. Its `run.sh` builds a local
+container image from that directory when the image is not already available.
+The directory includes its own application, Cynapsa Python SDK source, Go Core
+source, Docker build, and runtime scripts. Credentials and installation state
+are supplied at runtime and are not part of the image.
 
 ## Prerequisites
 
@@ -160,7 +160,7 @@ client. After successful enrollment, remove `CYNAPSA_TOKEN` from `.env`.
 
 Default state volume: `cynapsa-demo-client-state`.
 
-## Later runs and image updates
+## Later runs and image rebuilds
 
 Run an already enrolled identity from its directory:
 
@@ -168,13 +168,7 @@ Run an already enrolled identity from its directory:
 ./run.sh
 ```
 
-Force a fresh download of its published image:
-
-```sh
-./run.sh --pull
-```
-
-Maintainers with local SDK and Go Core checkouts can build instead:
+Force a rebuild from the SDK and Go Core bundled in the entity directory:
 
 ```sh
 ./run.sh --build

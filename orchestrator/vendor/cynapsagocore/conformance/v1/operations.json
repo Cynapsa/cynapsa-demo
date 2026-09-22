@@ -1,0 +1,101 @@
+{
+  "core_create": {
+    "json": {
+      "abi_version": 1,
+      "command_timeout_ms": 0,
+      "rpc_timeout_ms": 0,
+      "queue_limit": 4,
+      "payload_limit": 1048576
+    },
+    "maximum_payload_bytes": 134217696,
+    "zero_timeout_default_ms": 30000
+  },
+  "command_cancel": {
+    "json": {
+      "abi_version": 1,
+      "handle": "cmdh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "admission": {
+    "abi_version": 1,
+    "command_id": "command-1",
+    "command_handle": "cmdh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "accepted": true
+  },
+  "failed_completion": {
+    "abi_version": 1,
+    "command_id": "command-1",
+    "ok": false,
+    "error": {
+      "code": "connectivity_unavailable",
+      "message": "Connectivity is unavailable",
+      "retryable": true,
+      "stage": "connectivity",
+      "local_or_remote": "local"
+    }
+  },
+  "status": {
+    "abi_version": 1,
+    "status": {
+      "lifecycle": "created",
+      "connectivity": "unknown",
+      "personality": "unset",
+      "agent_id": "",
+      "mesh_id": "",
+      "mesh_endpoint": "",
+      "queued_message_count": 0
+    }
+  },
+  "payload_handle": {
+    "json": {
+      "abi_version": 1,
+      "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "payload_write": {
+    "input": {
+      "abi_version": 1,
+      "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "chunk": "AP8="
+    },
+    "result": {
+      "abi_version": 1,
+      "accepted": 2
+    }
+  },
+  "payload_read": {
+    "input": {
+      "abi_version": 1,
+      "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "offset": 0,
+      "limit": 2
+    },
+    "result": {
+      "abi_version": 1,
+      "chunk": "AP8=",
+      "eof": true
+    }
+  },
+  "normalized_error": {
+    "abi_version": 1,
+    "error": {
+      "code": "invalid_handle",
+      "message": "The local handle is invalid",
+      "retryable": false,
+      "stage": "sdk",
+      "local_or_remote": "local"
+    }
+  },
+  "authorization_failure": {
+    "abi_version": 1,
+    "command_id": "command-authorization-rejected",
+    "ok": false,
+    "error": {
+      "code": "authorization_rejected",
+      "message": "The requested operation is not authorized",
+      "retryable": false,
+      "stage": "policy",
+      "local_or_remote": "local"
+    }
+  }
+}

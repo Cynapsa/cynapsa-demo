@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "profiles": {
+    "clean": [],
+    "xmpp-latency": [
+      {"proxy":"xmpp","name":"latency-upstream","stream":"upstream","type":"latency","toxicity":1,"attributes":{"latency":60,"jitter":0}},
+      {"proxy":"xmpp","name":"latency-downstream","stream":"downstream","type":"latency","toxicity":1,"attributes":{"latency":60,"jitter":0}}
+    ],
+    "xmpp-half-open": [
+      {"proxy":"xmpp","name":"half-open-upstream","stream":"upstream","type":"timeout","toxicity":1,"attributes":{"timeout":0}},
+      {"proxy":"xmpp","name":"half-open-downstream","stream":"downstream","type":"timeout","toxicity":1,"attributes":{"timeout":0}}
+    ],
+    "xmpp-reset": [
+      {"proxy":"xmpp","name":"reset-peer","stream":"downstream","type":"reset_peer","toxicity":1,"attributes":{"timeout":0}}
+    ],
+    "http-bandwidth": [
+      {"proxy":"object","name":"bandwidth-upstream","stream":"upstream","type":"bandwidth","toxicity":1,"attributes":{"rate":32}}
+    ],
+    "http-half-open": [
+      {"proxy":"object","name":"half-open-upstream","stream":"upstream","type":"timeout","toxicity":1,"attributes":{"timeout":0}},
+      {"proxy":"object","name":"half-open-downstream","stream":"downstream","type":"timeout","toxicity":1,"attributes":{"timeout":0}}
+    ],
+    "http-reset": [
+      {"proxy":"object","name":"reset-peer","stream":"downstream","type":"reset_peer","toxicity":1,"attributes":{"timeout":0}}
+    ]
+  }
+}

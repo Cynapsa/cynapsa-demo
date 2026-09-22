@@ -16,10 +16,11 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
 ```
 
 Every directory is independently runnable. It has its own application source,
-configuration, Dockerfile, entrypoint, dependencies, documentation, and
-`run.sh`. The runner downloads a prebuilt ARM64 or AMD64 container image, so a
-user does not need the SDK or Go Core source. No credentials, enrollment tokens,
-or Cynapsa installation profiles are committed to this repository.
+configuration, Dockerfile, entrypoint, dependencies, documentation, `run.sh`,
+vendored Python SDK source, and vendored Go Core source. The runner builds the
+container entirely from that directory when its local image is missing. No
+credentials, enrollment tokens, or Cynapsa installation profiles are committed
+to this repository.
 
 ## Run one identity
 
@@ -34,8 +35,8 @@ cp .env.example .env
 ./run.sh
 ```
 
-The first run downloads and verifies the correct container image for the local
-Docker architecture. Every identity requires `DEMO_MESH_ID`; the client and
+The first run builds the container image for the local Docker architecture.
+Every identity requires `DEMO_MESH_ID`; the client and
 orchestrator also require their destination agent ID. `CYNAPSA_TOKEN` enrolls a
 new installation only when its state volume has no saved profile. The encrypted
 profile is retained in that identity's Docker volume, so the token can be
@@ -47,22 +48,24 @@ Go Core. It is never accepted as local configuration.
 Use the same flow in [`orchestrator/`](orchestrator/) and [`maps/`](maps/).
 Their `.env.example` files list the API credentials they require on every run.
 
-## Portable images
+## Self-contained directories
 
-The GitHub release contains separate ARM64 and AMD64 images for every identity,
-including the compatible Python SDK and Go Core. Each `run.sh` downloads the
-right archive automatically. The image itself contains no credentials or
-installation state; those are supplied when the container starts.
+Each entity directory contains the exact SDK and Go Core source used by its
+Docker build under `vendor/`. Copying only one entity directory to another
+machine is sufficient to build and run it with `./run.sh`; no repository-root
+files, sibling directories, SDK checkout, or Go Core checkout are required.
+The resulting image contains no credentials or installation state; those are
+supplied when the container starts.
 
 Use a different named state volume to run the same image with another
 enrollment token. This keeps the installations isolated instead of deleting or
 overwriting the first one. Each identity's README contains an example.
 
-## Maintainer builds
+## Rebuilds
 
-Maintainers can use `./run.sh --build` or `./build.sh` with local SDK and Go
-Core checkouts. Override `CYNAPSA_SDK_ROOT`, `CYNAPSA_CORE_ROOT`, and
-`CYNAPSA_DEMO_PLATFORM` when needed.
+Use `./run.sh --build` to force a rebuild from the source bundled in that
+directory. `CYNAPSA_DEMO_PLATFORM` remains available for an explicit Docker
+target platform.
 
 ## Security
 

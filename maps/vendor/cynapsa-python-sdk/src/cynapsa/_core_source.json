@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/Cynapsa/cynapsagocore.git",
+  "go_core_commit": "a21e4a23cf0c5b334e2818e2faa8b025d3d1e2b2",
+  "sha256": {
+    "cmd/cynapsacore-shared/cynapsacore_v1.h": "2fc7782dc2a2b01233410b2fa8f95ba25ab14f6e92b7485bc59290afd33b9b81",
+    "conformance/v1/README.md": "dba26d249d753bb336ab97134986219bbb1cfc5329d93fda516ca1158995377f",
+    "conformance/v1/abi.json": "3fe27479f432a72d4e48e9fb36acf7db7bcbb93084251740f6060f71a601a29f",
+    "conformance/v1/commands.json": "b569b79f3e88cd3c1de7ee2a0c3fa5b6f1141192e3d8549e86700eac1e7550fb",
+    "conformance/v1/events.json": "618c3197615aac38a790d8b3bea33c52a4df48097763c37aeece6765d5579d55",
+    "conformance/v1/operations.json": "9b2e60124e66dad7fff767a4757f9af7804911aef7c667f5968304ebd69a1830",
+    "conformance/v1/payloads.json": "7cc9a277d71a7d6975d841252d04f17817981f20bc973a1a872ee2aa58d50355",
+    "conformance/v1/results.json": "4f24e9f7ede9f01a7e77f5390f6c46f89f373de15e7aadcdbd36ec0df0fb9b01"
+  }
+}

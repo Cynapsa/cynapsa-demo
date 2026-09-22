@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+build/
+dist/
+*.egg-info/
+e2e/simple/.runtime/
+e2e/simple/artifacts/
+examples/manual_mesh/platform/.runtime/
+*.whl
+*.tar.gz
+.DS_Store

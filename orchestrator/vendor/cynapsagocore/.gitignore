@@ -1,0 +1,9 @@
+/bin/
+/dist/
+/coverage/
+*.coverprofile
+*.log
+*.so
+*.dylib
+*.dll
+*.h

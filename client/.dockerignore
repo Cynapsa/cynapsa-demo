@@ -1,5 +1,11 @@
 .private
+.env
+.state
 .git
+**/.git
+**/__pycache__
+**/.pytest_cache
+**/.DS_Store
 __pycache__
 *.py[cod]
 .DS_Store

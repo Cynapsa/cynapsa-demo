@@ -2,7 +2,8 @@
 
 The client runs on your laptop and communicates with the deployed demo agents
 over Cynapsa. You only need Docker and a Cynapsa enrollment token. The
-application, Python SDK, and Go Core are already included in the image.
+application, Python SDK source, and Go Core source are all included in this
+directory and built into its image.
 
 ## Requirements
 
@@ -41,7 +42,7 @@ Alternatively, provide the token directly from the shell:
 CYNAPSA_TOKEN='your-enrollment-token' ./run.sh
 ```
 
-The script downloads and verifies the correct client image, enrolls once, and
+The script builds the client image from this directory, enrolls once, and
 saves the encrypted installation profile in the
 `cynapsa-demo-client-state` Docker volume. Remove `CYNAPSA_TOKEN` from `.env`
 after enrollment.
@@ -61,10 +62,10 @@ cd /path/to/cynapsa-demo/client
 ./run.sh
 ```
 
-## Update the image
+## Rebuild the image
 
 ```sh
-./run.sh --pull
+./run.sh --build
 ```
 
 ## Test another token without losing the current installation
@@ -95,4 +96,4 @@ does not delete the agent in the Cynapsa portal.
 - `an enrollment token is required`: set `CYNAPSA_TOKEN` in `.env` or the shell.
 - Enrollment fails: generate a fresh token; enrollment tokens are intended for
   first-time use and belong to one identity.
-- To force a clean image download, run `./run.sh --pull`.
+- To force a fresh local image build, run `./run.sh --build`.

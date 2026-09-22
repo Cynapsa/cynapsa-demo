@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+
+# Retained for compatibility with older direct-build tooling. The authentication
+# E2E Compose stack deliberately does not use this file; it builds the current
+# custom ejabberd checkout selected by CYNAPSA_EJABBERD_PATH instead.
+FROM ghcr.io/processone/ejabberd@sha256:68482e33ff11934e73ef2881cf455ccefc1e03b31203f3ab651f4b2b1152b4a8
+USER root
+COPY --from=core /server/ejabberd/mod_cynapsa_mesh/src/mod_cynapsa_mesh.erl /src/mod_cynapsa_mesh.erl
+RUN set -eu; \
+    apk add --no-cache su-exec; \
+    cd /opt/ejabberd-26.04/bin; \
+    ERL=../erts-16.3.1/bin/erl; \
+    BOOT=../releases/26.4.0/start_clean; \
+    LIB=../lib; \
+    EJABBERD_INCLUDE=../lib/ejabberd-26.4.0/include; \
+    XMPP_INCLUDE=../lib/xmpp-1.13.3/include; \
+    mkdir -p /opt/cynapsa/ebin /tmp/test-ebin; \
+    "$ERL" +S 2:2 +A 2 -noshell -boot "$BOOT" -boot_var RELEASE_LIB "$LIB" \
+      -pa "$LIB/ejabberd-26.4.0/ebin" -pa "$LIB/xmpp-1.13.3/ebin" \
+      -eval "case compile:file(\"/src/mod_cynapsa_mesh.erl\", [deterministic,warnings_as_errors,{i,\"$EJABBERD_INCLUDE\"},{i,\"$XMPP_INCLUDE\"},{outdir,\"/opt/cynapsa/ebin\"},report]) of {ok,_}->halt(0); Other->io:format(\"compile failed: ~p~n\",[Other]),halt(1) end."; \
+    "$ERL" +S 2:2 +A 2 -noshell -boot "$BOOT" -boot_var RELEASE_LIB "$LIB" \
+      -pa /tmp/test-ebin -pa "$LIB/ejabberd-26.4.0/ebin" -pa "$LIB/xmpp-1.13.3/ebin" \
+      -eval "case compile:file(\"/src/mod_cynapsa_mesh.erl\", [{d,list_to_atom(\"TEST\")},deterministic,warnings_as_errors,{i,\"$EJABBERD_INCLUDE\"},{i,\"$XMPP_INCLUDE\"},{outdir,\"/tmp/test-ebin\"},report]) of {ok,_}->code:load_abs(\"/tmp/test-ebin/mod_cynapsa_mesh\"),case mod_cynapsa_mesh:test() of ok->halt(0); TestOther->io:format(\"tests failed: ~p~n\",[TestOther]),halt(1) end; Other->io:format(\"test compile failed: ~p~n\",[Other]),halt(1) end."; \
+    echo '149bd73a6e3752a8e81f0234386f92f1011fe4902337f5c52bab22c90e5fbfcb  /opt/cynapsa/ebin/mod_cynapsa_mesh.beam' | sha256sum -c -; \
+    rm -rf /src /tmp/test-ebin
+COPY e2e/simple/ejabberd-entrypoint.sh /usr/local/bin/cynapsa-ejabberd-entrypoint
+RUN chmod 0555 /usr/local/bin/cynapsa-ejabberd-entrypoint /opt/cynapsa/ebin/mod_cynapsa_mesh.beam
+ENV ERL_OPTIONS="-pa /opt/cynapsa/ebin"
+ENTRYPOINT ["/usr/local/bin/cynapsa-ejabberd-entrypoint"]
+CMD ["foreground"]

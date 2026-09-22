@@ -1,0 +1,131 @@
+hosts:
+  - "mesh.test"
+
+loglevel: info
+auth_method:
+  - internal
+  - cynapsa_jwt
+auth_password_format: scram
+auth_scram_hash: sha256
+auth_external_user_exists_check: false
+default_db: mnesia
+resource_conflict: closeold
+
+certfiles:
+  - /opt/ejabberd/conf/certs/fullchain.pem
+  - /opt/ejabberd/conf/certs/privkey.pem
+
+listen:
+  - port: 5222
+    ip: "10.240.70.2"
+    module: ejabberd_c2s
+    max_stanza_size: 524288
+    access: c2s
+    starttls_required: true
+  - port: 5443
+    ip: "10.240.70.2"
+    module: ejabberd_http
+    tls: true
+    request_handlers:
+      /api: mod_http_api
+      /upload: mod_cynapsa_mesh
+
+acl:
+  admin:
+    user:
+      - "admin@mesh.test"
+
+access_rules:
+  c2s:
+    - allow
+
+api_permissions:
+  "local E2E authority controller":
+    who:
+      - access:
+          - allow:
+              - acl: admin
+    what:
+      - cynapsa_mesh_ready
+      - cynapsa_mesh_create
+      - cynapsa_mesh_add
+      - cynapsa_mesh_remove
+      - cynapsa_mesh_remove_many
+      - cynapsa_mesh_snapshot
+      - cynapsa_attachment_authorize
+      - cynapsa_installation_invalidate
+      - cynapsa_auth_policy_apply
+      - cynapsa_runtime_sessions
+      - connected_users
+      - registered_users
+  "local E2E console":
+    from: ejabberd_ctl
+    who: all
+    what: "*"
+
+shaper:
+  fast: 1000000
+
+shaper_rules:
+  max_user_sessions: 4
+  max_user_offline_messages: 100
+  c2s_shaper: fast
+  s2s_shaper: fast
+
+modules:
+  mod_disco: {}
+  mod_adhoc: {}
+  mod_admin_extra: {}
+  mod_http_api: {}
+  mod_mam:
+    db_type: mnesia
+    assume_mam_usage: false
+    default: never
+    request_activates_archiving: false
+  mod_offline:
+    db_type: mnesia
+    access_max_user_messages: max_user_offline_messages
+  mod_roster:
+    db_type: mnesia
+  mod_shared_roster:
+    db_type: mnesia
+  mod_ping:
+    send_pings: true
+    ping_interval: 2 seconds
+    ping_ack_timeout: 5 seconds
+    timeout_action: kill
+  mod_stream_mgmt:
+    resend_on_timeout: if_offline
+    resume_timeout: 15
+  mod_time: {}
+  mod_stun_disco:
+    access: all
+    credentials_lifetime: 120
+    offer_local_services: false
+    secret: "@CYNAPSA_TURN_STATIC_AUTH_SECRET@"
+    services:
+      - host: "10.240.80.2"
+        port: 3478
+        transport: udp
+        type: stun
+      - host: "10.240.90.2"
+        port: 3478
+        restricted: true
+        transport: udp
+        type: turn
+  mod_cynapsa_mesh:
+    auth_mode: runtime_v2
+    jwt_issuer: "https://auth0.cynapsa.test:8443/"
+    jwt_audience: "https://api.cynapsa.test"
+    jwks_file: /opt/ejabberd/conf/auth0.jwks
+    runtime_identity_mode: registry
+    jwt_clock_skew_seconds: 30
+    jwks_unknown_kid_refresh_seconds: 30
+    mailbox_max_messages: 1024
+    mailbox_max_bytes: 67108864
+    mailbox_retention_seconds: 86400
+    mailbox_audit_log: true
+  mod_http_upload:
+    put_url: "https://mesh.test:5443/upload"
+    max_size: 134217760
+    docroot: /opt/ejabberd/upload

@@ -3,8 +3,9 @@
 This identity accepts `/ask` RPCs from the demo client. Gemini decides whether
 to answer directly or call the maps identity over Cynapsa.
 
-The directory is independently runnable. Docker downloads the published image;
-the SDK and Go Core source repositories are not required.
+The directory is independently runnable and includes its own pinned Python SDK
+and Go Core source. It does not use repository-root files, sibling directories,
+or external SDK/Core checkouts.
 
 ## Run
 
@@ -20,7 +21,7 @@ image. Encrypted Cynapsa state persists in the
 `.env` after enrollment; `GEMINI_API_KEY` is required on every run.
 `DEMO_MESH_ID` and `DEMO_MAPS_AGENT_ID` are also required on every run.
 
-Use `./run.sh --pull` to replace the local image with the published version.
+Use `./run.sh --build` to force a rebuild from this directory.
 
 ## Test another identity
 

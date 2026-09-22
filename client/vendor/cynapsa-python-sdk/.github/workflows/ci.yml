@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+  CORE_COMMIT: a21e4a23cf0c5b334e2818e2faa8b025d3d1e2b2
+
+jobs:
+  unit:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - run: python -m compileall -q src tests scripts examples
+      - run: python scripts/verify_core_provenance.py
+      - run: python -m pytest -q --ignore=tests/test_installed_artifacts.py
+
+  optional-http:
+    name: Optional HTTP adapters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[client,server,test]"
+      - run: python -m pytest -q tests/test_http_bridge.py
+
+  package:
+    name: Build and installed-artifact smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install ".[test]" twine
+      - run: python -m pytest -q tests/test_installed_artifacts.py
+      - run: python -m build
+      - run: python -m twine check dist/*
+
+  native-core:
+    name: Pinned native core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - name: Check out pinned Go core
+        shell: bash
+        run: |
+          git clone https://github.com/Cynapsa/cynapsagocore.git "$RUNNER_TEMP/cynapsagocore"
+          git -C "$RUNNER_TEMP/cynapsagocore" checkout --detach "$CORE_COMMIT"
+          python scripts/verify_core_provenance.py --core-checkout "$RUNNER_TEMP/cynapsagocore"
+      - name: Run relevant Go tests
+        shell: bash
+        run: go test ./internal/payload ./internal/sdkboundary ./cmd/cynapsacore-shared
+        working-directory: ${{ runner.temp }}/cynapsagocore
+      - name: Build release shared library
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            go build -buildmode=c-shared -ldflags="-extldflags=-Wl,-exported_symbols_list,$PWD/cmd/cynapsacore-shared/exports_darwin.txt" -o "$RUNNER_TEMP/libcynapsacore.dylib" ./cmd/cynapsacore-shared
+            echo "CYNAPSA_CORE_SMOKE_LIBRARY=$RUNNER_TEMP/libcynapsacore.dylib" >> "$GITHUB_ENV"
+          else
+            go build -buildmode=c-shared -ldflags="-extldflags=-Wl,--version-script,$PWD/cmd/cynapsacore-shared/exports_linux.map" -o "$RUNNER_TEMP/libcynapsacore.so" ./cmd/cynapsacore-shared
+            echo "CYNAPSA_CORE_SMOKE_LIBRARY=$RUNNER_TEMP/libcynapsacore.so" >> "$GITHUB_ENV"
+          fi
+        working-directory: ${{ runner.temp }}/cynapsagocore
+      - name: Full suite with native guards enabled
+        run: python -m pytest -q
+      - name: Repeat native lifecycle smoke
+        run: python -m pytest -q tests/test_real_command_smoke.py tests/test_session.py::test_repeated_real_providerless_auth_failure_cleans_safely

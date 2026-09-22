@@ -1,0 +1,352 @@
+[
+  {
+    "name": "empty",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "empty",
+      "result": {}
+    }
+  },
+  {
+    "name": "capabilities",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "capabilities",
+      "result": {
+        "commands": [
+          "core.status"
+        ],
+        "features": [
+          "rpc"
+        ]
+      }
+    }
+  },
+  {
+    "name": "status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "status",
+      "result": {
+        "lifecycle": "ready",
+        "connectivity": "available",
+        "personality": "native",
+        "agent_id": "",
+        "mesh_id": "",
+        "mesh_endpoint": "",
+        "queued_message_count": 0
+      }
+    }
+  },
+  {
+    "name": "config",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "config",
+      "result": {
+        "command_timeout_ms": 30000,
+        "rpc_timeout_ms": 30000,
+        "queue_limit": 1,
+        "payload_limit": 1
+      }
+    }
+  },
+  {
+    "name": "auth",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "auth",
+      "result": {
+        "agent_id": "agent",
+        "mesh_id": "mesh",
+        "agent_instance_id": "",
+        "personality": "native"
+      }
+    }
+  },
+  {
+    "name": "agent_id",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "agent_id",
+      "result": {
+        "agent_id": "agent"
+      }
+    }
+  },
+  {
+    "name": "mesh_list",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "mesh_list",
+      "result": {
+        "meshes": [
+          {
+            "mesh_id": "m",
+            "active": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "address_mappings",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "address_mappings",
+      "result": {
+        "mappings": [
+          {
+            "virtual_origin": "https://a.test",
+            "recipient": "a"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "address_resolution",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "address_resolution",
+      "result": {
+        "recipient": "a",
+        "path": "/",
+        "query": ""
+      }
+    }
+  },
+  {
+    "name": "send",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "send",
+      "result": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "accepted": true
+      }
+    }
+  },
+  {
+    "name": "response",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "response",
+      "result": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "from_agent_id": "a",
+        "mesh_id": "mesh",
+        "payload": {
+          "native": {
+            "content_type": "",
+            "path": "/",
+            "body": "dmFsdWU="
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "event",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "event",
+      "result": {
+        "abi_version": 1,
+        "event_id": "e",
+        "event_name": "command.queue_full",
+        "created_at": "1970-01-01T00:00:01Z",
+        "payload": {
+          "queue": "command",
+          "capacity": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "delivery_queue_status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "delivery_queue_status",
+      "result": {
+        "queued": 0,
+        "paused": false
+      }
+    }
+  },
+  {
+    "name": "payload_handle",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "payload_handle",
+      "result": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "size": 0,
+        "eof": false,
+        "chunk": null
+      }
+    }
+  },
+  {
+    "name": "conversation_status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "conversation_status",
+      "result": {
+        "conversation_id": "c",
+        "mesh_id": "mesh",
+        "peer": "a",
+        "delivery_state": "ready",
+        "queued_message_count": 0,
+        "blocked": false
+      }
+    }
+  },
+  {
+    "name": "conversation_list",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "conversation_list",
+      "result": {
+        "conversations": []
+      }
+    }
+  },
+  {
+    "name": "policy",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "policy",
+      "result": {
+        "rules": [],
+        "allowed": false
+      }
+    }
+  },
+  {
+    "name": "peer_status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "peer_status",
+      "result": {
+        "peer": "a",
+        "connectivity": "unknown",
+        "reachable": false,
+        "recovery_in_progress": false
+      }
+    }
+  },
+  {
+    "name": "connectivity_status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "connectivity_status",
+      "result": {
+        "state": "unknown"
+      }
+    }
+  },
+  {
+    "name": "diagnostic_snapshot",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "diagnostic_snapshot",
+      "result": {
+        "status": {
+          "lifecycle": "ready",
+          "connectivity": "available",
+          "personality": "native",
+          "agent_id": "",
+          "mesh_id": "",
+          "mesh_endpoint": "",
+          "queued_message_count": 0
+        },
+        "command_queue_depth": 0,
+        "event_queue_depth": 0,
+        "peer_count": 0,
+        "queued_message_count": 0,
+        "pending_rpc_count": 0,
+        "payload_transfer_count": 0
+      }
+    }
+  },
+  {
+    "name": "core_init",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "core_init",
+      "result": {
+        "sdk_session_id": "s"
+      }
+    }
+  },
+  {
+    "name": "completion_channel",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "completion_channel",
+      "result": {
+        "channel_id": "channel",
+        "max_in_flight": 1
+      }
+    }
+  },
+  {
+    "name": "event_sink",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "ok": true,
+      "result_type": "event_sink",
+      "result": {
+        "sink_id": "sink"
+      }
+    }
+  }
+]

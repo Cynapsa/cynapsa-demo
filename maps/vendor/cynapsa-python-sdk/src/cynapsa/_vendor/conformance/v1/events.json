@@ -1,0 +1,293 @@
+[
+  {
+    "name": "session.state_changed",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e1",
+      "event_name": "session.state_changed",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "previous": "created",
+        "current": "ready"
+      }
+    }
+  },
+  {
+    "name": "connectivity.state_changed",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e2",
+      "event_name": "connectivity.state_changed",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "previous": "unavailable",
+        "current": "available"
+      }
+    }
+  },
+  {
+    "name": "peer.reachable",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e3",
+      "event_name": "peer.reachable",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "peer": "a",
+        "reachable": true
+      }
+    }
+  },
+  {
+    "name": "peer.unreachable",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e4",
+      "event_name": "peer.unreachable",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "peer": "a",
+        "reachable": false
+      }
+    }
+  },
+  {
+    "name": "message.received",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e5",
+      "event_name": "message.received",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "from_agent_id": "a",
+        "mesh_id": "mesh",
+        "mode": "msg",
+        "request_handle": "",
+        "payload": {
+          "native": {
+            "content_type": "",
+            "path": "/",
+            "body": "dmFsdWU="
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "message.queued",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e6",
+      "event_name": "message.queued",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "state": "queued"
+      }
+    }
+  },
+  {
+    "name": "message.retried",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e7",
+      "event_name": "message.retried",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "state": "queued"
+      }
+    }
+  },
+  {
+    "name": "message.deduplicated",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e8",
+      "event_name": "message.deduplicated",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "state": "ready"
+      }
+    }
+  },
+  {
+    "name": "delivery.resumed",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e9",
+      "event_name": "delivery.resumed",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "state": "ready"
+      }
+    }
+  },
+  {
+    "name": "delivery.replayed",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e10",
+      "event_name": "delivery.replayed",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "conversation_id": "c",
+        "state": "queued"
+      }
+    }
+  },
+  {
+    "name": "payload.transfer_started",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e12",
+      "event_name": "payload.transfer_started",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "state": "started",
+        "completed": 0,
+        "total": 10
+      }
+    }
+  },
+  {
+    "name": "payload.transfer_progress",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e13",
+      "event_name": "payload.transfer_progress",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "state": "progress",
+        "completed": 5,
+        "total": 10
+      }
+    }
+  },
+  {
+    "name": "payload.transfer_completed",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e14",
+      "event_name": "payload.transfer_completed",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "state": "completed",
+        "completed": 10,
+        "total": 10
+      }
+    }
+  },
+  {
+    "name": "payload.transfer_failed",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e15",
+      "event_name": "payload.transfer_failed",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "state": "failed",
+        "completed": 5,
+        "total": 10
+      }
+    }
+  },
+  {
+    "name": "policy.rejected",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e16",
+      "event_name": "policy.rejected",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "message_id": "m",
+        "peer": "a",
+        "path": "/"
+      }
+    }
+  },
+  {
+    "name": "rpc.timeout",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e17",
+      "event_name": "rpc.timeout",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "command_id": "c"
+      }
+    }
+  },
+  {
+    "name": "command.queue_full",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e18",
+      "event_name": "command.queue_full",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "queue": "command",
+        "capacity": 1
+      }
+    }
+  },
+  {
+    "name": "event.queue_full",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e19",
+      "event_name": "event.queue_full",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "queue": "event",
+        "capacity": 1
+      }
+    }
+  },
+  {
+    "name": "core.error",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e20",
+      "event_name": "core.error",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "error": {
+          "code": "queue_full",
+          "message": "The local queue is full",
+          "retryable": false,
+          "stage": "command",
+          "local_or_remote": "local"
+        }
+      }
+    }
+  },
+  {
+    "name": "diagnostics.log",
+    "json": {
+      "abi_version": 1,
+      "event_id": "e21",
+      "event_name": "diagnostics.log",
+      "created_at": "1970-01-01T00:00:01Z",
+      "payload": {
+        "level": "info",
+        "code": "core_state",
+        "message": "Core state changed",
+        "diagnostic_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  }
+]

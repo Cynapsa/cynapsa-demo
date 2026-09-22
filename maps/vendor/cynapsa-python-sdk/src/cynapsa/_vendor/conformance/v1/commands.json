@@ -1,0 +1,689 @@
+[
+  {
+    "name": "core.init",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "core.init",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "core.capabilities",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "core.capabilities",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "core.status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "core.status",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "core.shutdown",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "core.shutdown",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "session.config.get",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "session.config.get",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "session.config.update",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "session.config.update",
+      "sdk_session_id": "session-1",
+      "args": {
+        "command_timeout_ms": 1
+      }
+    }
+  },
+  {
+    "name": "command.channel.register",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "command.channel.register",
+      "sdk_session_id": "session-1",
+      "args": {
+        "capacity": 4
+      }
+    }
+  },
+  {
+    "name": "command.channel.clear",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "command.channel.clear",
+      "sdk_session_id": "session-1",
+      "args": {
+        "channel_id": "channel-1"
+      }
+    }
+  },
+  {
+    "name": "command.cancel",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "command.cancel",
+      "sdk_session_id": "session-1",
+      "args": {
+        "command_handle": "cmdh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  },
+  {
+    "name": "event.sink.register",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "event.sink.register",
+      "sdk_session_id": "session-1",
+      "args": {
+        "capacity": 4
+      }
+    }
+  },
+  {
+    "name": "event.sink.clear",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "event.sink.clear",
+      "sdk_session_id": "session-1",
+      "args": {
+        "sink_id": "sink-1"
+      }
+    }
+  },
+  {
+    "name": "event.sink.bind",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "event.sink.bind",
+      "sdk_session_id": "session-1",
+      "args": {
+        "sink_id": "sink-1"
+      }
+    }
+  },
+  {
+    "name": "auth.login",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.login",
+      "sdk_session_id": "session-1",
+      "args": {
+        "mesh_endpoint": "mesh.example.test:5222",
+        "username": "agent-a@example.test",
+        "password": "secret",
+        "mesh_id": "mesh-1",
+        "agent_instance_id": "instance-1"
+      }
+    }
+  },
+  {
+    "name": "auth.connect",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.connect",
+      "sdk_session_id": "session-1",
+      "args": {
+        "mesh_endpoint": "mesh.example.test:5222",
+        "username": "agent-a@example.test",
+        "password": "secret",
+        "mesh_id": "mesh-1",
+        "agent_instance_id": "instance-1"
+      }
+    }
+  },
+  {
+    "name": "auth.token_login",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.token_login",
+      "sdk_session_id": "session-1",
+      "args": {
+        "token": "cpsa_e1.01234567-89ab-4def-8123-456789abcdef.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "mesh_id": "mesh-one"
+      }
+    }
+  },
+  {
+    "name": "auth.token_connect",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.token_connect",
+      "sdk_session_id": "session-1",
+      "args": {
+        "token": "cpsa_e1.01234567-89ab-4def-8123-456789abcdef.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "mesh_id": "mesh-one"
+      }
+    }
+  },
+  {
+    "name": "auth.installation_login",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.installation_login",
+      "sdk_session_id": "session-1",
+      "args": {
+        "profile_id": "default",
+        "mesh_id": "mesh-one"
+      }
+    }
+  },
+  {
+    "name": "auth.installation_connect",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.installation_connect",
+      "sdk_session_id": "session-1",
+      "args": {
+        "profile_id": "default",
+        "mesh_id": "mesh-one"
+      }
+    }
+  },
+  {
+    "name": "auth.logout",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.logout",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "auth.agent_id",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "auth.agent_id",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "mesh.list",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "mesh.list",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "mesh.membership.refresh",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "mesh.membership.refresh",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "address.map.put",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "address.map.put",
+      "sdk_session_id": "session-1",
+      "args": {
+        "virtual_origin": "https://agent-a.test",
+        "recipient": "agent-a@example.test"
+      }
+    }
+  },
+  {
+    "name": "address.map.remove",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "address.map.remove",
+      "sdk_session_id": "session-1",
+      "args": {
+        "virtual_origin": "https://agent-a.test"
+      }
+    }
+  },
+  {
+    "name": "address.map.list",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "address.map.list",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "address.resolve",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "address.resolve",
+      "sdk_session_id": "session-1",
+      "args": {
+        "url": "https://agent-a.test/path?q=1"
+      }
+    }
+  },
+  {
+    "name": "message.send",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "message.send",
+      "sdk_session_id": "session-1",
+      "args": {
+        "to": "agent-b@example.test",
+        "payload": {
+          "native": {
+            "content_type": "application/json",
+            "path": "/orders",
+            "body": "eA=="
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "message.request",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "message.request",
+      "sdk_session_id": "session-1",
+      "args": {
+        "to": "agent-b@example.test",
+        "payload": {
+          "native": {
+            "content_type": "application/json",
+            "path": "/orders",
+            "body": "eA=="
+          }
+        },
+        "ttl_ms": 1000
+      }
+    }
+  },
+  {
+    "name": "message.reply",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "message.reply",
+      "sdk_session_id": "session-1",
+      "args": {
+        "request_handle": "reqh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "payload": {
+          "native": {
+            "content_type": "application/json",
+            "path": "/orders",
+            "body": "eA=="
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "delivery.next",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.next",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "delivery.accept",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.accept",
+      "sdk_session_id": "session-1",
+      "args": {
+        "event_id": "event-1"
+      }
+    }
+  },
+  {
+    "name": "handler.register",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "handler.register",
+      "sdk_session_id": "session-1",
+      "args": {
+        "path": "/orders"
+      }
+    }
+  },
+  {
+    "name": "handler.unregister",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "handler.unregister",
+      "sdk_session_id": "session-1",
+      "args": {
+        "path": "/orders"
+      }
+    }
+  },
+  {
+    "name": "payload.open",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.open",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "payload.write_chunk",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.write_chunk",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "chunk": "eA=="
+      }
+    }
+  },
+  {
+    "name": "payload.finish",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.finish",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  },
+  {
+    "name": "payload.cancel",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.cancel",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  },
+  {
+    "name": "payload.read",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.read",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 0,
+        "limit": 1
+      }
+    }
+  },
+  {
+    "name": "payload.close",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.close",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  },
+  {
+    "name": "payload.retain",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.retain",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  },
+  {
+    "name": "payload.release",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "payload.release",
+      "sdk_session_id": "session-1",
+      "args": {
+        "handle": "payh_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  },
+  {
+    "name": "delivery.queue.status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.queue.status",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "delivery.retry",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.retry",
+      "sdk_session_id": "session-1",
+      "args": {
+        "message_id": "message-1"
+      }
+    }
+  },
+  {
+    "name": "delivery.pause",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.pause",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "delivery.resume",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.resume",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "delivery.drop",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "delivery.drop",
+      "sdk_session_id": "session-1",
+      "args": {
+        "message_id": "message-1"
+      }
+    }
+  },
+  {
+    "name": "conversation.list",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "conversation.list",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "conversation.status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "conversation.status",
+      "sdk_session_id": "session-1",
+      "args": {
+        "conversation_id": "conversation-1"
+      }
+    }
+  },
+  {
+    "name": "conversation.close",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "conversation.close",
+      "sdk_session_id": "session-1",
+      "args": {
+        "conversation_id": "conversation-1"
+      }
+    }
+  },
+  {
+    "name": "policy.set",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "policy.set",
+      "sdk_session_id": "session-1",
+      "args": {
+        "rules": [
+          {
+            "action": "allow",
+            "path": "/orders",
+            "agent_id": "agent-b@example.test"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "policy.get",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "policy.get",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "policy.test",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "policy.test",
+      "sdk_session_id": "session-1",
+      "args": {
+        "input": {
+          "to": "agent-b@example.test",
+          "payload": {
+            "native": {
+              "content_type": "application/json",
+              "path": "/orders",
+              "body": "eA=="
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "diagnostics.peer_status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "diagnostics.peer_status",
+      "sdk_session_id": "session-1",
+      "args": {
+        "peer": "agent-b@example.test"
+      }
+    }
+  },
+  {
+    "name": "diagnostics.connectivity_status",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "diagnostics.connectivity_status",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "diagnostics.snapshot",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "diagnostics.snapshot",
+      "sdk_session_id": "session-1",
+      "args": {}
+    }
+  },
+  {
+    "name": "diagnostics.logs.subscribe",
+    "json": {
+      "abi_version": 1,
+      "command_id": "command-1",
+      "command_name": "diagnostics.logs.subscribe",
+      "sdk_session_id": "session-1",
+      "args": {
+        "enabled": true
+      }
+    }
+  }
+]

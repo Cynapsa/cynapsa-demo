@@ -1,0 +1,108 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cynapsa"
+version = "0.1.0"
+description = "Synchronous, asynchronous, and HTTP Bridge APIs for Cynapsa"
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.10,<3.15"
+authors = [{name = "Cynapsa"}]
+keywords = ["cynapsa", "messaging", "rpc", "http-bridge"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/Cynapsa/cynapsa-python-sdk"
+Repository = "https://github.com/Cynapsa/cynapsa-python-sdk"
+Issues = "https://github.com/Cynapsa/cynapsa-python-sdk/issues"
+
+[project.scripts]
+cynapsa = "cynapsa._cli:main"
+
+[project.optional-dependencies]
+client = [
+    "aiohttp>=3.9",
+    "requests>=2.31",
+    "httpx>=0.27",
+    "urllib3>=2.2",
+]
+server = ["starlette>=0.40"]
+test = [
+    "aiohttp>=3.9",
+    "build>=1.2",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+    "requests>=2.31",
+    "starlette>=0.40",
+    "urllib3>=2.2",
+]
+dev = [
+    "aiohttp>=3.9",
+    "build>=1.2",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+    "requests>=2.31",
+    "starlette>=0.40",
+    "twine>=5",
+    "urllib3>=2.2",
+]
+# Compatibility aliases retained for milestone 1-7 users.
+http = [
+    "aiohttp>=3.9",
+    "requests>=2.31",
+    "httpx>=0.27",
+    "urllib3>=2.2",
+]
+asgi = ["starlette>=0.40"]
+http-bridge = [
+    "aiohttp>=3.9",
+    "requests>=2.31",
+    "httpx>=0.27",
+    "urllib3>=2.2",
+    "starlette>=0.40",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cynapsa = [
+    "py.typed",
+    "_core_source.json",
+    "_vendor/cmd/cynapsacore-shared/*.h",
+    "_vendor/conformance/v1/*",
+]
+
+[tool.setuptools.exclude-package-data]
+cynapsa = ["**/__pycache__/*", "**/*.py[cod]"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+    "installed_artifact: builds and installs release artifacts",
+    "native: requires a real Cynapsa shared library",
+    "stress: repeated lifecycle and concurrency regression coverage",
+]

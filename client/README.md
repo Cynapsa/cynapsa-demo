@@ -1,8 +1,9 @@
 # Demo client
 
 This directory is an independently runnable interactive client for the deployed
-Cynapsa demo. Docker is the only runtime prerequisite; the published container
-already includes the application, Python SDK, and Go Core.
+Cynapsa demo. Docker is the only runtime prerequisite. This directory contains
+the application plus the complete Python SDK and Go Core source needed to build
+its container.
 
 For complete setup and usage instructions, see [RUN.md](RUN.md).
 
@@ -14,7 +15,7 @@ cp .env.example .env
 ./run.sh
 ```
 
-The runner downloads and verifies the correct ARM64 or AMD64 image. The token
+The runner builds the image from this directory when it is missing. The token
 is passed as a runtime environment variable and enrolls the client only when
 the `cynapsa-demo-client-state` Docker volume has no saved profile. Remove the
 token from `.env` after enrollment; later runs reuse the encrypted profile.
@@ -25,9 +26,8 @@ precedence over the value in `.env`.
 ## Commands
 
 ```sh
-./run.sh          # download if needed, then run
-./run.sh --pull   # replace the local image from the GitHub release
-./run.sh --build  # maintainer build using local SDK/Core checkouts
+./run.sh          # build if needed, then run
+./run.sh --build  # force a rebuild from this directory
 ```
 
 `DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` are required. This keeps the

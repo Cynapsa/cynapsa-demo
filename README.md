@@ -6,6 +6,9 @@ This repository contains three independent native Cynapsa identities:
 - [`orchestrator/`](orchestrator/) — routes user questions and delegates map work.
 - [`maps/`](maps/) — answers place questions with Gemini and Google Places.
 
+AI agents and operators should follow [`AGENTS.md`](AGENTS.md) for the complete
+startup order, runtime variables, state-volume rules, and verification signals.
+
 ```text
 client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
                                                                    |

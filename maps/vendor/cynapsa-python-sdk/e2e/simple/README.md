@@ -1,5 +1,43 @@
 # Simple real-mesh E2E
 
+The SDK does not contain an ejabberd image, module, or configuration. Both
+runners build the Dockerfile in the dedicated ejabberd checkout selected by
+`CYNAPSA_EJABBERD_PATH`, and read their server fixtures from its
+`test/sdk-e2e/` directory. `run-peer-authority.sh` is the current 80-RPC
+baseline for the `remove-snapshot` Go Core and dedicated ejabberd branches.
+`run.sh` is a historical password/resource/snapshot deep-fault campaign;
+do not use it to qualify the current peer-authority protocol.
+
+The peer-authority runner compiles every custom module from the dedicated
+ejabberd worktree, checks that both worktrees are on `remove-snapshot`, and
+records exact source manifests. It uses the same six SDK applications and
+router/VLAN topology, but authenticates through disposable runtime-v2 grants.
+A local HTTPS enrollment fixture answers the Core's fixed enrollment URL only
+inside the test containers; its per-run CA, JWT signing key, and grants are
+deleted during cleanup. The test-only ejabberd profile uses signed runtime
+claims, while production uses the Management-backed attachment registry. This
+runner therefore checks SDK/Core/server login, peer handshake, and the 80
+request/reply cells. Client exits exercise installation-revoke handling and
+the separate packet/action acknowledgments: both server XMPP sessions must
+remain open as each client finishes. This matters because an 80/80 request
+count can otherwise conceal a server reconnect storm between client runs. An
+unexpected server disconnect fails the run and is captured in
+`unexpected-server-session-closures.log`. It does **not** qualify production
+Enrollment, Management, registry provisioning, membership revokes, resume
+expiry, or fault recovery.
+
+The evidence build records bounded routing metadata and exact peer-authority
+IQ IDs on inbound rejection and authorization send/return. It does not log
+message bodies or credentials. The verifier accepts a complete JSON diagnostic
+followed immediately by a Go evidence record, because Docker may concatenate
+concurrent stdout/stderr writes on one line; malformed diagnostics still fail.
+The peer-authority runner also checks a real A→B→C error path: native and
+ordinary Requests clients (A) call the native server (B), which calls the
+FastAPI server (C). C returns 429 with a body and headers. B explicitly
+forwards it, deliberately remaps it to a 503 `RPCException`, or leaves it
+unhandled for a sanitized 500. The verifier requires all six client checks
+and matching B/C dispatch evidence without changing the 80-cell matrix.
+
 This harness runs six Python SDK application containers, one real ejabberd
 container, and separate Coturn STUN-only and authenticated TURN containers
 behind a single router-on-a-stick container. One private internal
@@ -8,7 +46,7 @@ application IP network. Each application container and ejabberd container shares
 the network namespace of a dedicated LAN sidecar through
 `network_mode: service:<sidecar>`.
 
-Each sidecar owns one unique VLAN and `/24`; the router terminates all fourteen
+Each sidecar owns one unique VLAN and `/24`; the router terminates all nine
 VLANs on subinterfaces, forwards between them with ICMP redirects disabled, and
 keeps its NAT table empty. Sidecar entrypoints create `cynapsa-lan`, assign only
 the `10.240.x.2` application address there, route other application LANs through
@@ -23,28 +61,33 @@ run as an unprivileged user, have no network entrypoint, do not install network
 tools, and contain no VLAN, route, or probe code. Topology verification is done
 by shell helpers inside sidecar namespaces.
 
-The harness runs actual PostgreSQL, local Auth0-emulator, Management,
-Enrollment, and custom ejabberd repository builds. Those five service entities
-also receive distinct routed VLANs; agents never receive a direct Docker
-service-network bypass. The result is explicitly a `local-offline-contract`
-test with `identity-provider=local-auth0-emulator`, not live-Auth0 acceptance or
-production qualification.
-
-The runner provisions one tenant, environment, and authoritative mesh through
-Management, then provisions six distinct logical agents, adds all six direct
-memberships, issues one mesh-bound single-installation `cpsa_e1` grant per
-agent, and revokes each automatically-created unbound grant. Core authenticates
-through Enrollment, persists six independent installation profiles, and binds
-the server-issued `r2.<installation UUID>.<nonce>` resource. Each fresh Core session must also
+The historical runner still requires a Go Core worktree based on pinned commit
+`a21e4a23cf0c5b334e2818e2faa8b025d3d1e2b2`, but its ejabberd image is
+built only from the dedicated server checkout. Its old snapshot assertions
+require a compatible historical server implementation and are not a current
+release gate.
+`run.sh` registers six runtime-generated accounts,
+creates `simple-e2e`, adds every account through `cynapsa_mesh_add`, and checks
+that all six bare JIDs appear in the authoritative snapshot. Every Core binds
+the exact `simple-e2e` XMPP resource. This exercises membership-gated resource
+binding and same-resource server routing. Each fresh Core session must also
 discover exactly `urn:cynapsa:mesh-authority:1`, install and acknowledge its
 complete authority snapshot, and process membership-control IQs on the
-independent control lane. The same ejabberd extension preserves the verified
-runtime context across a successful XEP-0198 resume without negotiating a fresh
-membership snapshot.
+independent control lane. The same ejabberd extension transfers that exact
+ready state across a successful XEP-0198 resume and emits the server-owned
+resume-authority result that releases Core's replay barrier.
 Replayed application messages may carry one XEP-0203 delayed-delivery element
 before or after their single Cynapsa frame, matching ejabberd's offline replay
 shape. Core strictly validates and discards that transport metadata before the
 unchanged frame reaches the SDK.
+
+The original `run.sh` intentionally remains the legacy-credential
+compatibility qualification: it registers test accounts directly and binds the
+legacy mesh resource. The local enrollment fixture in `run-peer-authority.sh`
+is only a protocol test seam, not production authentication. Full
+Management/Enrollment integration, installed-profile restart, and the
+provider-backed matrix belong to the cross-repository `CynapsaTests`
+acceptance environment.
 
 The matrix is:
 
@@ -61,7 +104,8 @@ with no Cynapsa import; Compose wraps `uvicorn module:app` with `cynapsa run`,
 and it returns `[reversed, "monkey"]`. The monkey sync client is likewise a
 standalone Requests program with no Cynapsa import or Cynapsa-aware helper;
 Compose supplies its two RPC origin mappings. Each client makes ten RPCs to
-each server and validates 20 results; the run succeeds only at 80/80. Each
+each server and validates 20 results; the peer-authority baseline requires both
+80/80 and stable server XMPP sessions. Each
 client retains one identity, container, and Core session while talking to both
 servers.
 
@@ -88,11 +132,9 @@ transition check.
 XEP-0215 from ejabberd is the sole ICE-service authority. It advertises the
 standalone STUN discovery service on `10.240.80.2:3478/udp` and the authenticated
 TURN service on `10.240.90.2:3478/udp`; no application container receives an ICE
-server override. TURN credentials and all authentication credentials are
-generated per run. Enrollment tokens, JWTs, provider credentials, and service
-secrets stay below the mode-0700 runtime tree, are removed unconditionally, and
-are scanned out of retained artifacts. Evidence contains only labels and
-identity hashes.
+server override. TURN credentials use a per-run random static-auth secret. The
+secret and account passwords stay in a mode-0700 runtime directory, are removed
+unconditionally, and are scanned out of retained artifacts.
 
 The suite never sets a `CYNAPSA_ICE_TRANSPORT_POLICY=relay` runtime override.
 Core keeps the ordinary `all` ICE policy; TURN-only behavior is a property of
@@ -134,11 +176,11 @@ The monkey async client is allowed only TCP to
 20/20 delivery prove rank-2/XMPP operation.
 
 During active RPCs, the harness blackholes the native server and monkey async
-client until ejabberd reports that the exact resource's fifteen-second XEP-0198
+client until ejabberd reports that the exact resource's five-second XEP-0198
 resume window has expired. Waiting for the server lifecycle event accounts for
 variable TCP failure-detection time while remaining below the fault campaign's
 60-second RPC TTL. The margin covers Core's 30-second Rank1 no-progress window
-followed by stale-stream expiry, fresh runtime-JWT authentication, resource binding,
+followed by stale-stream expiry, fresh SCRAM authentication, resource binding,
 authority restoration, and durable replay; these phases are intentionally
 sequential in the injected outage. Only the native-async and monkey-async deployments use this
 margin: their command and shutdown timeout, all normal E2E authentication, and
@@ -162,10 +204,10 @@ not veto the campaign. The expiry baseline is sampled immediately before fault i
 after active dispatch observation and the potentially long TURN warm-up; a
 strictly newer expiry is then required. This avoids both earlier unrelated
 expiries and a race with the fault helper's bounded rejection pings.
-Full-session, runtime-JWT-authentication, and resumption baselines are sampled
+Full-session, SCRAM-authentication, and resumption baselines are sampled
 immediately before network restoration. The applications and Core receive no
 fault flag and perform no test retry. Each outage must increment both DROP counters,
-produce a post-fault XEP-0198 expiry, then produce fresh runtime-JWT authentication
+produce a post-fault XEP-0198 expiry, then produce fresh SCRAM authentication
 and a new full c2s session without resumption after restoration, and still
 preserve exact unique delivery.
 
@@ -193,21 +235,25 @@ window expires. This window includes TCP failure detection and the new
 TCP/TLS/SASL stream negotiation required before the client can send
 `<resume/>`; it is test-environment margin, not an application timeout.
 
-Passive Erlang call tracing counts authority snapshot requests and verified
-runtime-context copies during resume without adding a test API or changing
-protocol behavior. Those trace counters are global, so
+Passive Erlang call tracing counts authority discovery, snapshot requests, the
+resume hook, and ready/not-ready resume-authority results without adding a
+test API or changing protocol behavior. Those trace counters are global, so
 the harness waits for the pre-existing fault target and the newly started
 active client to have open, authority-ready resources before recording the
 campaign baseline. By the time that baseline is taken, every participant that
 can still move those global counters in the campaign is therefore already
-ready. Initial snapshot work from any participant therefore
+ready. Initial discovery or snapshot work from any participant therefore
 cannot be misattributed to the later resumed resource. Each short campaign requires exactly
-one successful resume, one pre-resume runtime-JWT reconnect, and one
-verified-context copy; zero resume expiry, new bound session, or snapshot
-request; and completion of the exact
+one successful resume, one pre-resume SCRAM reconnect, one resume hook, and one
+ready barrier result; zero resume expiry, new bound session, authority
+discovery, snapshot request, or not-ready result; and completion of the exact
 original request. XEP-0198 requires authentication on the replacement XML
-stream before pre-bind resumption; that authentication exchange is therefore counted
-rather than misclassified as a fresh bound Cynapsa session. The final
+stream before pre-bind resumption; that SCRAM exchange is therefore counted
+rather than misclassified as a fresh bound Cynapsa session. XEP-0215 external-
+service discovery, including any resume-time external-service replay or
+requery, concerns ICE service configuration; it is distinct from Cynapsa
+mesh-authority discovery and does not increment these mesh-authority discovery
+counters. The final
 client/server validator still requires one start,
 one pass, and one server dispatch for every original matrix cell, proving the
 80 RPCs complete exactly once. Per-campaign evidence and aggregate trace
@@ -215,25 +261,43 @@ counters are retained as artifacts.
 
 ## Run
 
-Docker, Docker Compose, OpenSSL, Python 3, and current checkouts of
-`CynapsaTests`, `aztmmanagement`, `Enrollment`, custom `ejabberd`, and Go Core
-are required. The service checkouts are explicit so the test never silently
-substitutes mocks or stale vendored code:
+For the current peer-authority baseline, use:
 
 ```sh
-CYNAPSA_TESTS_PATH=/absolute/path/to/CynapsaTests \
-CYNAPSA_MANAGEMENT_PATH=/absolute/path/to/aztmmanagement \
-CYNAPSA_ENROLLMENT_PATH=/absolute/path/to/Enrollment \
-CYNAPSA_EJABBERD_PATH=/absolute/path/to/ejabberd \
-CYNAPSA_GO_CORE_PATH=/absolute/path/to/cynapsagocore \
+./e2e/simple/run-peer-authority.sh
+```
+
+It defaults to sibling `cynapsagocore-remove-snapshot` and
+`ejabberd-remove-snapshot` worktrees. Override either path explicitly with
+`CYNAPSA_GO_CORE_PATH` or `CYNAPSA_EJABBERD_PATH`. The runner requires the
+`remove-snapshot` branch in both, builds the actual dirty source trees, checks
+all four client reports and both server dispatch counts, and saves sanitized
+evidence plus both source manifests in `e2e/simple/artifacts/`. The local
+enrollment hostname override is confined to the test's internal Docker network.
+It does not modify host DNS or contact production Enrollment.
+
+The legacy deep-fault runner below is retained as historical test machinery,
+not a current release gate. It also requires `CYNAPSA_EJABBERD_PATH` to point
+at a dedicated checkout with `test/sdk-e2e/legacy.yml`.
+
+Docker, Docker Compose, OpenSSL, and Python 3 are required. By default the
+harness discovers the Go worktree at `../cynapsa/cynapsagocore` relative to
+this repository:
+
+```sh
 ./e2e/simple/run.sh
+```
+
+Override it with another worktree based on the pinned Core commit:
+
+```sh
+CYNAPSA_GO_CORE_PATH=/absolute/path/to/cynapsagocore ./e2e/simple/run.sh
 ```
 
 The runner verifies that commit `a21e4a23cf0c5b334e2818e2faa8b025d3d1e2b2` is
 an ancestor, builds
 the Linux shared library in the agent image, generates test-only TLS and
-private service credentials under a unique per-run `.runtime` directory,
-provisions the mesh and six agents through Management,
+passwords under a unique per-run `.runtime` directory, provisions the mesh,
 starts both servers, starts the client sidecars, runs all four clients
 sequentially by default, and tears down its uniquely named containers, networks,
 volumes, locally built images, and runtime secrets on success or failure. The
@@ -275,7 +339,7 @@ example `native-async-client,monkey-async-client`.
 The probe completes an XMPP STARTTLS exchange, sends tagged cross-VLAN TCP and
 UDP from `10.240.10.2` to `10.240.50.2`, checks both observed source addresses,
 verifies the client route uses `10.240.10.1`, rejects any untagged address or
-route, checks all fourteen router VLANs and the routed auth services, proves standalone STUN infrastructure and
+route, checks all nine router VLANs, proves standalone STUN infrastructure and
 authenticated TURN protocol readiness, and verifies redirects and baseline
 router NAT are disabled. The standalone STUN readiness probe does not make that
 service part of the XEP-0215 authority exposed to agents.
@@ -285,6 +349,6 @@ requires each client to contain exactly one start and pass for every
 target/message pair—not merely a claimed total of 20. It also requires exactly
 40 native-server dispatches (20 native payloads and 20 HTTP request payloads)
 and exactly 40 monkey-server `/reverse` dispatches. The runner verifies that
-ejabberd opened every Core session with its exact server-issued runtime-v2 resource. This
+ejabberd opened every Core session with the exact `/simple-e2e` resource. This
 makes an ICE/connectivity failure distinguishable from an application dispatch,
 resource-binding, or response-conversion failure.

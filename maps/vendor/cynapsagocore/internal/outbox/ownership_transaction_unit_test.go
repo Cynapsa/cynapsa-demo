@@ -54,6 +54,57 @@ func acceptedRPCPair(t *testing.T) (protocol.Envelope, protocol.Envelope) {
 	return request, response
 }
 
+func TestReleaseRank2OwnedPreservesPayloadWithoutResurrectingRetiredClaims(t *testing.T) {
+	queue, err := New(Config{MessageCapacity: 2, ByteCapacity: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := acceptedRPCPair(t)
+	reservation, err := queue.EnqueueReserved(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.ClaimRank2(request.MessageID, 19); err != nil {
+		t.Fatal(err)
+	}
+	queue.Release(reservation)
+	if err = queue.ReleaseRank2Owned(request.MessageID, 18); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatalf("wrong ordinal release = %v", err)
+	}
+	if !queue.OwnsRank2(request.MessageID) {
+		t.Fatal("wrong ordinal disturbed carrier claim")
+	}
+	if err = queue.ReleaseRank2Owned(request.MessageID, 19); err != nil {
+		t.Fatal(err)
+	}
+	if ids := queue.EligibleMessageIDs(1); len(ids) != 1 || ids[0] != request.MessageID {
+		t.Fatalf("released payload not schedulable: %v", ids)
+	}
+	if err = queue.ReleaseRank2Owned(request.MessageID, 19); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatalf("duplicate release = %v", err)
+	}
+	reservation, err = queue.ReserveEligible(request.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.ClaimRank2(request.MessageID, 20); err != nil {
+		t.Fatal(err)
+	}
+	queue.Release(reservation)
+	if err = queue.ReleaseRank2Owned(request.MessageID, 19); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatalf("stale release disturbed new claim: %v", err)
+	}
+	if err = queue.RetireRank2Owned(request.MessageID, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.ReleaseRank2Owned(request.MessageID, 20); !errors.Is(err, ErrUnknownEntry) {
+		t.Fatalf("retired payload resurrected: %v", err)
+	}
+	if count, _ := queue.Usage(); count != 0 {
+		t.Fatalf("retired payload remains: %d", count)
+	}
+}
+
 func TestAcceptedRPCResponseCrossesRank1AndRank2Ownership(t *testing.T) {
 	for _, state := range []string{"rank1-pending", "rank2-owned"} {
 		t.Run(state, func(t *testing.T) {

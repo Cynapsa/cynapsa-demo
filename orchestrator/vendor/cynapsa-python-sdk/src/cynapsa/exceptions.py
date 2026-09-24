@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cynapsa.http import CynapsaResponse
 
 
 class RPCException(Exception):
@@ -111,6 +114,46 @@ class NativeError(Exception):
             f"{type(self).__name__}(status={self.status!r}, code={self.code!r}, "
             f"message={self.message!r}, details={self.details!r})"
         )
+
+
+class RemoteNativeError(NativeError):
+    """A remote application failure projected for a native RPC caller.
+
+    The retained response is Cynapsa's dependency-free canonical model, not
+    an HTTP-client-library object. Intermediaries may explicitly forward it.
+    """
+
+    _response: CynapsaResponse
+
+    def __init__(self, status: int, response: CynapsaResponse) -> None:
+        from cynapsa.http import CynapsaResponse
+
+        if type(response) is not CynapsaResponse or response.status_code < 400:
+            raise TypeError("response must be a canonical 4xx/5xx CynapsaResponse")
+        if response.error is not None:
+            code = response.error.code
+            message = response.error.detail
+            details = response.error.details
+        elif response.status_code == 404:
+            code, message, details = (
+                "not_found",
+                "The requested endpoint was not found",
+                None,
+            )
+        else:
+            code, message, details = (
+                "remote_error",
+                "The remote application returned an error",
+                None,
+            )
+        super().__init__(status, code, message, details)
+        self._response = response
+
+    @property
+    def response(self) -> CynapsaResponse:
+        """The complete, immutable canonical response from the remote agent."""
+
+        return self._response
 
 
 def _freeze(value: Any) -> Any:

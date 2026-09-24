@@ -134,9 +134,7 @@ def _connect(
 def test_one_handler_serves_rpc_and_msg_and_unregisters_by_path(
     fake_library: FakeLibrary, native_factory: None
 ) -> None:
-    session, driver = _connect(
-        fake_library, overrides={"message.reply": ("send", SEND_RESULT)}
-    )
+    session, driver = _connect(fake_library, overrides={"message.reply": ("send", SEND_RESULT)})
     seen: list[str] = []
 
     @session.on("*")
@@ -294,6 +292,88 @@ def test_rpc_return_none_msg_discard_and_sanitized_exceptions(
         assert any(b"not_found" in body and b"safe detail" in body for body in bodies)
         assert not any(b"secret implementation detail" in body for body in bodies)
         assert session.next_local_diagnostic(2).code == "handler_error"
+    finally:
+        session.close()
+        driver.stop()
+
+
+def test_intermediate_native_handler_explicitly_forwards_remote_error_response(
+    fake_library: FakeLibrary, native_factory: None
+) -> None:
+    # Simulate A -> B -> C. C's complete canonical response reaches B; B
+    # decides whether to forward it to A or let the safe handler default win.
+    downstream = cynapsa.CynapsaResponse(
+        429,
+        "Too Many Requests",
+        (("retry-after", "60"), ("x-trace", "first"), ("x-trace", "second")),
+        b'{"error":"slow down"}',
+        cynapsa.CynapsaApplicationError(
+            "rate_limited", "Please retry later", {"retry_after_seconds": 60}
+        ),
+    )
+    downstream_result = {
+        "message_id": "response-from-c",
+        "conversation_id": "conversation-with-c",
+        "from_agent_id": "agent-c@example.test",
+        "mesh_id": "mesh-one",
+        "payload": downstream._wire(),
+    }
+    session, driver = _connect(
+        fake_library,
+        overrides={
+            "message.request": ("response", downstream_result),
+            "message.reply": ("send", SEND_RESULT),
+        },
+    )
+    observed: list[cynapsa.RemoteNativeError] = []
+
+    @session.on("/forward")
+    def forward(_request: cynapsa.CynapsaRequest) -> cynapsa.CynapsaResponse:
+        try:
+            session.request("agent-c@example.test", "lookup")
+        except cynapsa.RemoteNativeError as error:
+            observed.append(error)
+            return error.response
+        raise AssertionError("expected downstream error")
+
+    @session.on("/unhandled")
+    def unhandled(_request: cynapsa.CynapsaRequest) -> None:
+        session.request("agent-c@example.test", "lookup")
+
+    try:
+        fake_library.emit_callback(
+            CYNAPSA_CALLBACK_V1_EVENT, _http_event("forward", path="/forward")
+        )
+        _wait(
+            lambda: len(
+                [item for item in driver.commands if item["command_name"] == "message.reply"]
+            ) == 1
+        )
+        assert observed[0].response == downstream
+        assert observed[0].code == "rate_limited"
+        replies = [
+            item["args"]["payload"]
+            for item in driver.commands
+            if item["command_name"] == "message.reply"
+        ]
+        assert replies[0] == downstream._wire()
+
+        fake_library.emit_callback(
+            CYNAPSA_CALLBACK_V1_EVENT, _http_event("unhandled", path="/unhandled")
+        )
+        _wait(
+            lambda: len(
+                [item for item in driver.commands if item["command_name"] == "message.reply"]
+            ) == 2
+        )
+        replies = [
+            item["args"]["payload"]["http_response"]
+            for item in driver.commands
+            if item["command_name"] == "message.reply"
+        ]
+        assert replies[1]["status_code"] == 500
+        assert replies[1]["error"]["code"] == "handler_error"
+        assert b"retry-after" not in base64.b64decode(replies[1]["body"])
     finally:
         session.close()
         driver.stop()
@@ -813,32 +893,66 @@ def test_close_race_either_rejects_new_event_or_drains_accepted_handler(
         driver.stop()
 
 
-def test_unowned_delivery_remains_unaccepted_until_a_route_owns_it(
+def test_missing_native_handler_returns_404_and_later_registration_handles_new_requests(
     fake_library: FakeLibrary, native_factory: None
 ) -> None:
-    session, driver = _connect(fake_library)
+    session, driver = _connect(
+        fake_library, overrides={"message.reply": ("send", SEND_RESULT)}
+    )
     handled = threading.Event()
     try:
-        fake_library.emit_callback(CYNAPSA_CALLBACK_V1_EVENT, _event("late-owner"))
+        fake_library.emit_callback(CYNAPSA_CALLBACK_V1_EVENT, _event("missing-owner"))
         diagnostic = session.next_local_diagnostic(2)
         assert diagnostic.code == "handler_not_found"
-        assert not any(
-            item["command_name"] == "delivery.accept"
-            and item["args"]["event_id"] == "late-owner"
-            for item in driver.commands
+        _wait(
+            lambda: any(item["command_name"] == "message.reply" for item in driver.commands)
         )
-        session.on("/route", lambda req: handled.set())
-        assert handled.wait(2)
         assert len(
             [
-                item
-                for item in driver.commands
+                item for item in driver.commands
                 if item["command_name"] == "delivery.accept"
-                and item["args"]["event_id"] == "late-owner"
+                and item["args"]["event_id"] == "missing-owner"
             ]
         ) == 1
+        reply = next(
+            item for item in driver.commands if item["command_name"] == "message.reply"
+        )
+        response = reply["args"]["payload"]["http_response"]
+        assert response["status_code"] == 404
+        assert response["error"]["code"] == "not_found"
+        session.on("/route", lambda req: handled.set())
+        fake_library.emit_callback(CYNAPSA_CALLBACK_V1_EVENT, _event("new-owner"))
+        assert handled.wait(2)
     finally:
         session.close()
+        driver.stop()
+
+
+@pytest.mark.asyncio
+async def test_missing_async_native_handler_returns_404(
+    fake_library: FakeLibrary, native_factory: None
+) -> None:
+    driver = CompletionDriver(fake_library)
+    driver.overrides["message.reply"] = ("send", SEND_RESULT)
+    driver.start()
+    session = await cynapsa.connect_async(**AUTH)
+    try:
+        fake_library.emit_callback(
+            CYNAPSA_CALLBACK_V1_EVENT, _event("missing-async", path="/missing")
+        )
+        await asyncio.to_thread(
+            _wait,
+            lambda: any(
+                item["command_name"] == "message.reply" for item in driver.commands
+            ),
+        )
+        reply = next(
+            item for item in driver.commands if item["command_name"] == "message.reply"
+        )
+        assert reply["args"]["payload"]["http_response"]["status_code"] == 404
+        assert reply["args"]["payload"]["http_response"]["error"]["code"] == "not_found"
+    finally:
+        await session.close()
         driver.stop()
 
 

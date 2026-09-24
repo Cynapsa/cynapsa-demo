@@ -36,7 +36,7 @@ manifest used by each run.
 | HTTP Bridge mapping | Exactly `{recipient, mode}` per normalized origin; path/query preserved separately; no login-level mode |
 | HTTP clients | Requests, HTTPX sync/async, buffered urllib3, buffered `urllib.request.urlopen`, and buffered aiohttp; unmapped requests use the original network path |
 | HTTP server | Explicit ASGI app through `asgi_app=` or `hook_asgi`; canonical RPC response and sanitized 500 failure |
-| CLI | `cynapsa run` same-process Python script/module/console-script wrapping with secure enrollment-token or legacy-password sources, installed-profile restart, explicit `--allow` policy override, deterministic shorthand parsing, and CLI-only FastAPI lifespan discovery |
+| CLI | `cynapsa run` same-process Python script/module/console-script wrapping with secure enrollment-token or legacy-password sources, installed-profile restart, explicit fail-closed `--allow` policy bootstrap, deterministic shorthand parsing, and CLI-only FastAPI lifespan discovery |
 | Lifecycle | `login()` returns `HttpBridgeHandle`; `login_async()` returns `AsyncHttpBridgeHandle` |
 | Payloads | Current inline behavior only; expanded payload support remains deferred |
 
@@ -93,7 +93,7 @@ servers, or pre-fork process models.
 /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m compileall -q \
   src tests scripts examples
 python scripts/verify_core_provenance.py
-./e2e/simple/run.sh
+./e2e/simple/run-peer-authority.sh
 ```
 
 The focused SDK handoff reports the exact full-suite result from the current

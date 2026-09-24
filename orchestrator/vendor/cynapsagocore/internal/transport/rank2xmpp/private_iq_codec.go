@@ -109,7 +109,7 @@ func decodePrivateIQError(reader xml.TokenReader, outer xml.StartElement, melliu
 				return ErrCapacity, true
 			case "service-unavailable":
 				return ErrUnavailable, true
-			case "bad-request", "conflict", "forbidden", "not-allowed", "policy-violation":
+			case "bad-request", "conflict", "forbidden", "item-not-found", "not-allowed", "policy-violation":
 				return fmt.Errorf("iq-error-condition-%s: %w", condition, ErrProtocol), true
 			default:
 				return fmt.Errorf("iq-error-condition-%s: %w", condition, ErrProtocol), false

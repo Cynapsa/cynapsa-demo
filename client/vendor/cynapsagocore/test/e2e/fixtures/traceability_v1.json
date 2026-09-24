@@ -22,7 +22,7 @@
 	"auth.installation_connect": {"positive": ["TestV2ProfilesSupportSameTokenAcrossMeshesReplicasAndTokenFreeRestart"], "negative": ["TestInstallationAuthenticationRequiresProfileAndMesh"]},
     "auth.logout": {"positive": ["auth_logout_completion_positive"], "negative": ["auth_logout_later_admission_negative"]},
     "auth.agent_id": {"positive": ["auth_agent_id_real_positive"], "negative": ["TestStageBEveryAuthenticatedCommandFailsClosedBeforeAuthentication"]},
-    "mesh.list": {"positive": ["mesh_list_real_positive"], "negative": ["TestStageBAcceptanceMalformedAbsentAndUnavailableTopologyFailClosed"]},
+    "mesh.list": {"positive": ["mesh_list_real_positive"], "negative": ["TestMeshListUsesInstalledAuthorityAndExplicitRefreshFailsClosed"]},
     "mesh.membership.refresh": {"positive": ["mesh_refresh_real_positive"], "negative": ["TestMeshListUsesInstalledAuthorityAndExplicitRefreshFailsClosed"]},
     "address.map.put": {"positive": ["address_put_positive"], "negative": ["address_malformed_origin_negative"]},
     "address.map.remove": {"positive": ["address_remove_positive"], "negative": ["address_malformed_origin_negative"]},

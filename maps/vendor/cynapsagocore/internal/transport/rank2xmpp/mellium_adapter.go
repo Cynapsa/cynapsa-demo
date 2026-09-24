@@ -111,6 +111,8 @@ type melliumSession struct {
 	resumeReplay               []Stanza
 	resumeCorrelated           map[string]Stanza
 	resumeCorrelatedGeneration uint64
+	issuedPeerAuthorizations   map[string]issuedPeerAuthorization
+	issuedPeerAuthorizationIDs []string
 	resumeGeneration           uint64
 	resumeBarrier              *resumeAuthorityBarrier
 	resumeBarrierGeneration    uint64
@@ -120,6 +122,7 @@ type melliumSession struct {
 	correlatedGate             chan struct{}
 	authorityFence             func(uint64) bool
 	controlLaneActive          bool
+	dynamicPeerAuthority       bool
 	inboundBudget              *transport.InboundBudget
 	closing                    chan struct{}
 	closeDone                  chan struct{}
@@ -151,6 +154,15 @@ func newMelliumSession(config MelliumConfig, endpoint Endpoint) *melliumSession 
 	return &melliumSession{config: config, endpoint: endpoint, meshID: config.MeshID, events: make(chan Event, capacity), controlEvents: make(chan Event, capacity), controlBudget: controlBudget, serveDone: make(chan serveResult, 4), writeGate: writeGate, correlatedGate: correlatedGate, inboundBudget: budget, closing: make(chan struct{}), issuedJingles: make(map[string]issuedJingle), issuedJingleCapacity: config.StreamManagementCapacity}
 }
 
+func (s *melliumSession) setDynamicPeerAuthority(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.dynamicPeerAuthority = enabled
+	s.mu.Unlock()
+}
+
 func (s *melliumSession) bindInboundBudget(budget *transport.InboundBudget) error {
 	if s == nil || budget == nil {
 		return ErrInvalidConfig
@@ -177,7 +189,9 @@ const (
 	bareServerResultUnowned bareServerResultKind = iota
 	bareServerResultResumeAuthority
 	bareServerResultEntityTime
+	bareServerResultPeerAuthorization
 	bareServerResultResumedExternalService
+	bareServerResultLateExternalService
 )
 
 type bareServerResultOwnership struct {
@@ -186,6 +200,7 @@ type bareServerResultOwnership struct {
 	management *StreamManagement
 	sequence   uint32
 	record     Stanza
+	requested  string
 }
 
 // setAuthorityIngressFence binds private authority control to the exact
@@ -607,6 +622,7 @@ func (s *melliumSession) EnableStreamManagement(ctx context.Context, resumable b
 	}
 	s.session = xsession
 	s.management = management
+	s.clearIssuedPeerAuthorizationsLocked()
 	s.ctx = owned
 	s.cancel = cancel
 	s.generation++
@@ -661,7 +677,7 @@ func (s *melliumSession) Send(ctx context.Context, record Stanza) error {
 		return ErrUnavailable
 	}
 	if err := s.acquireWrite(ctx); err != nil {
-		return err
+		return &wireError{stage: wireNotStarted, cause: err}
 	}
 	defer s.releaseWrite()
 	s.mu.Lock()
@@ -670,18 +686,39 @@ func (s *melliumSession) Send(ctx context.Context, record Stanza) error {
 	if suspended {
 		return ErrUnavailable
 	}
+	if err := ctx.Err(); err != nil {
+		return &wireError{stage: wireNotStarted, cause: err}
+	}
 	if err := management.RecordSent(record); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return finishManagedSend(management, record, &wireError{stage: wireNotStarted, cause: err})
+	}
+	var watchdogDone chan struct{}
+	var stopWatchdog func() bool
+	if ctx.Done() != nil {
+		watchdogDone = make(chan struct{})
+		stopWatchdog = context.AfterFunc(ctx, func() {
+			defer close(watchdogDone)
+			emitRank2Evidence(rank2EvidenceRecord{Event: "socket_interrupt_requested", Source: "mellium", Stage: "send_context_done"}, ctx.Err())
+			s.interruptIO()
+		})
+	}
+	defer func() {
+		if stopWatchdog != nil && !stopWatchdog() {
+			<-watchdogDone
+		}
+	}()
 	return finishManagedSend(management, record, s.sendWireLockedTracked(ctx, session, record, true))
 }
 
 // interruptIO is a fail-stop operation, not Close. It makes a blocked Mellium
 // writer or output-mutex waiter observable by closing the exact raw connection,
 // while retaining the XEP-0198 ledger, credentials, and replay state needed by
-// PrepareResume or clean-session reconciliation. sendSession joins the
-// cancellation callback before releasing Client send ownership, preventing a
-// late interrupt from reaching a resumed replacement connection.
+// PrepareResume or clean-session reconciliation. Send joins its cancellation
+// callback before releasing the write gate, preventing a late interrupt from
+// reaching a resumed replacement connection.
 func (s *melliumSession) interruptIO() {
 	if s == nil {
 		return
@@ -1190,8 +1227,13 @@ func (s *melliumSession) PrepareResume(ctx context.Context) (bool, error) {
 	}
 	s.resumeCorrelatedGeneration = generation
 	s.resumeGeneration = generation
-	s.resumeBarrier = &resumeAuthorityBarrier{done: make(chan struct{})}
-	s.resumeBarrierGeneration = generation
+	if s.dynamicPeerAuthority {
+		s.resumeBarrier = nil
+		s.resumeBarrierGeneration = 0
+	} else {
+		s.resumeBarrier = &resumeAuthorityBarrier{done: make(chan struct{})}
+		s.resumeBarrierGeneration = generation
+	}
 	s.resumeMarkerSeen = false
 	s.resumeResultQueued = false
 	s.mu.Unlock()
@@ -1327,6 +1369,10 @@ func (s *melliumSession) WaitResumeAuthorityResult(ctx context.Context) error {
 		return ErrInvalidConfig
 	}
 	s.mu.Lock()
+	if s.dynamicPeerAuthority {
+		s.mu.Unlock()
+		return nil
+	}
 	barrier := s.resumeBarrier
 	generation := s.resumeBarrierGeneration
 	current := !s.closed && generation != 0 && generation == s.generation
@@ -1751,6 +1797,7 @@ func (s *melliumSession) Close(ctx context.Context) error {
 	s.generation++
 	closingGeneration := s.generation
 	s.clearIssuedJinglesLocked()
+	s.clearIssuedPeerAuthorizationsLocked()
 	s.closeDone = make(chan struct{})
 	closeDone = s.closeDone
 	if s.closing == nil {
@@ -1917,12 +1964,17 @@ func (s *melliumSession) serve(session *xmpp.Session, ctx context.Context, gener
 		return session.Serve(xmpp.HandlerFunc(func(t xmlstream.TokenReadEncoder, start *xml.StartElement) error {
 			handleErr := s.handleElement(ctx, t, start)
 			if handleErr != nil {
+				id, kind, from, to := inboundEvidenceAttrs(start.Attr)
 				emitRank2Evidence(rank2EvidenceRecord{
 					Event:            "xmpp_element_handler_failed",
 					Source:           "mellium",
 					Stage:            "handle_element",
 					ElementNamespace: start.Name.Space,
 					ElementLocal:     start.Name.Local,
+					StanzaID:         id,
+					StanzaType:       kind,
+					From:             from,
+					To:               to,
 					WireGeneration:   generation,
 					Current:          true,
 				}, handleErr)
@@ -1945,6 +1997,49 @@ func (s *melliumSession) serve(session *xmpp.Session, ctx context.Context, gener
 	case s.serveDone <- serveResult{generation: generation, err: err}:
 	default:
 	}
+}
+
+// The test-evidence build records only bounded routing metadata, never stanza
+// bodies, credentials, or arbitrary attributes. This is diagnostic evidence,
+// not a relaxation of inbound authentication.
+func inboundEvidenceAttrs(attrs []xml.Attr) (id, kind, from, to string) {
+	for _, attr := range attrs {
+		if attr.Name.Space != "" {
+			continue
+		}
+		value := attr.Value
+		if len(value) > 128 {
+			value = value[:128]
+		}
+		switch attr.Name.Local {
+		case "id":
+			id = value
+		case "type":
+			kind = value
+		case "from":
+			from = value
+		case "to":
+			to = value
+		}
+	}
+	return
+}
+
+func emitInboundAuthRejection(ctx context.Context, outer xml.StartElement, reason string) {
+	id, kind, from, to := inboundEvidenceAttrs(outer.Attr)
+	generation, _ := ctx.Value(melliumSessionGenerationKey{}).(uint64)
+	emitRank2Evidence(rank2EvidenceRecord{
+		Event:            "inbound_auth_rejected",
+		Source:           "mellium",
+		Stage:            reason,
+		ElementNamespace: outer.Name.Space,
+		ElementLocal:     outer.Name.Local,
+		StanzaID:         id,
+		StanzaType:       kind,
+		From:             from,
+		To:               to,
+		WireGeneration:   generation,
+	}, ErrAuthentication)
 }
 
 // retireServeGeneration fail-stops only the exact published generation whose
@@ -2006,6 +2101,9 @@ func (s *melliumSession) handleElement(ctx context.Context, t xmlstream.TokenRea
 		if (iq.Type == stanza.ResultIQ || iq.Type == stanza.ErrorIQ) && iq.From.Localpart() == "" && iq.From.Resourcepart() == "" {
 			owner, ownerErr := s.classifyBareServerResult(ctx, *start, iq)
 			if ownerErr != nil {
+				if errors.Is(ownerErr, ErrAuthentication) {
+					emitInboundAuthRejection(ctx, *start, "bare_server_result")
+				}
 				return ownerErr
 			}
 			switch owner.kind {
@@ -2013,9 +2111,25 @@ func (s *melliumSession) handleElement(ctx context.Context, t xmlstream.TokenRea
 				return s.handleResumeAuthorityResult(ctx, t, *start, iq)
 			case bareServerResultEntityTime:
 				return s.handleLateServerTimeResult(ctx, t, *start, iq, owner)
+			case bareServerResultPeerAuthorization:
+				return s.handleLatePeerAuthorizationResult(ctx, t, *start, iq, owner)
 			case bareServerResultResumedExternalService:
 				return s.handleResumedExternalServiceResult(ctx, t, *start, iq, owner)
+			case bareServerResultLateExternalService:
+				// A delayed XEP-0215 reply has no live waiter and cannot
+				// change ICE state. Consume it without retiring this stream.
+				bounded, budgetErr := newStanzaBudget(t, *start, MaximumSignalBytes)
+				if budgetErr != nil {
+					return budgetErr
+				}
+				if skipErr := xmlstream.Skip(bounded); skipErr != nil {
+					return skipErr
+				}
+				owner.management.MarkHandledInbound()
+				emitRank2Evidence(rank2EvidenceRecord{Event: "late_external_service_discarded", Source: "control", Stage: "unowned_result"}, nil)
+				return nil
 			default:
+				emitInboundAuthRejection(ctx, *start, "bare_server_result_unowned")
 				return ErrAuthentication
 			}
 		}
@@ -2028,13 +2142,49 @@ func (s *melliumSession) handleElement(ctx context.Context, t xmlstream.TokenRea
 		if iq.Type == stanza.SetIQ && iq.From.Localpart() == "" &&
 			iq.From.Resourcepart() == "" && iq.To.String() == s.username+"/"+s.boundResource() {
 			bound, parseErr := jid.Parse(s.username)
-			if parseErr != nil || iq.From.Domainpart() != bound.Domainpart() || iq.ID == "" {
+			if parseErr != nil || iq.From.Domainpart() != bound.Domainpart() || iq.ID == "" || !validServerPingIQAttributes(start.Attr) {
+				emitInboundAuthRejection(ctx, *start, "server_set_envelope")
 				return ErrAuthentication
 			}
-			decodeErr := decodeMembershipChanged(t, *start, s.config.StanzaBudgetBytes)
+			kind, revokes, actionID, decodeErr := decodeServerAuthoritySet(t, *start, s.config.StanzaBudgetBytes)
 			if decodeErr != nil {
+				emitRank2Evidence(rank2EvidenceRecord{Event: "peer_revocation_decode_failed", Source: "control", Stage: "decode"}, decodeErr)
 				_ = s.fenceAuthorityIngress(ctx)
 				return decodeErr
+			}
+			if kind == EventPeerRevoked {
+				emitRank2Evidence(rank2EvidenceRecord{Event: "peer_revocation_decoded", Source: "control", Stage: "decode", Attempt: len(revokes)}, nil)
+				if err := s.acquireWrite(ctx); err != nil {
+					return err
+				}
+				defer s.releaseWrite()
+				if emitErr := s.emit(ctx, Event{Kind: EventPeerRevoked, Revocations: revokes, ControlID: actionID}); emitErr != nil {
+					emitRank2Evidence(rank2EvidenceRecord{Event: "peer_revocation_emit_failed", Source: "control", Stage: "enqueue"}, emitErr)
+					return emitErr
+				}
+				s.mu.Lock()
+				management := s.management
+				s.mu.Unlock()
+				if management == nil {
+					return ErrStreamManagement
+				}
+				// Mellium sends an automatic service-unavailable IQ when a handler
+				// does not answer on this writer. Acknowledge packet parsing here;
+				// owner cleanup sends a separate correlated action IQ later.
+				packet := Stanza{Kind: StanzaPeerRevocationPacketAck,
+					From: iq.To.String(), To: iq.From.String(), MeshID: s.meshID,
+					MessageID: iq.ID}
+				if err := management.RecordSent(packet); err != nil {
+					return err
+				}
+				if _, err := xmlstream.Copy(t, iq.Result(nilTokenReader{})); err != nil {
+					return err
+				}
+				if err := encodeSMRequest(t); err != nil {
+					return err
+				}
+				management.MarkHandledInbound()
+				return nil
 			}
 			if !s.fenceAuthorityIngress(ctx) {
 				return ErrUnavailable
@@ -2068,6 +2218,7 @@ func (s *melliumSession) handleElement(ctx context.Context, t xmlstream.TokenRea
 			return nil
 		}
 		if !s.acceptPeerResource(iq.From.Resourcepart()) || iq.To.String() != s.username+"/"+s.boundResource() {
+			emitInboundAuthRejection(ctx, *start, "peer_iq_address")
 			return ErrAuthentication
 		}
 		s.mu.Lock()
@@ -2190,6 +2341,7 @@ func (s *melliumSession) classifyBareServerResult(ctx context.Context, outer xml
 	server := local.Domain()
 	iqType, valid := validCorrelatedIQAttrs(outer.Attr, iq.ID, server, local)
 	if outer.Name != (xml.Name{Space: stanza.NSClient, Local: "iq"}) || !valid || iqType != iq.Type {
+		emitRank2Evidence(rank2EvidenceRecord{Event: "bare_server_result_rejected", Source: "control", Stage: "invalid_envelope"}, ErrAuthentication)
 		return bareServerResultOwnership{}, ErrAuthentication
 	}
 	if iq.Type == stanza.ResultIQ && resumeOwned && validResumeAuthorityID(iq.ID) {
@@ -2212,8 +2364,34 @@ func (s *melliumSession) classifyBareServerResult(ctx context.Context, outer xml
 			management: management, sequence: sequence,
 		}, nil
 	}
+	if record, requested, issued := s.lookupIssuedPeerAuthorization(iq.ID); issued &&
+		record.From == local.String() && record.To == server.String() && record.MeshID == meshID {
+		return bareServerResultOwnership{
+			kind: bareServerResultPeerAuthorization, generation: generation,
+			management: management, record: record, requested: requested,
+		}, nil
+	}
 	record, retained := s.claimResumedExternalService(generation, iq.ID)
+	if !retained && iq.Type == stanza.ResultIQ && validExternalServiceID(iq.ID) {
+		// XEP-0215 results can arrive after their original Mellium waiter
+		// retired. The full server envelope was validated above; this ID
+		// gives no authority to mutate state, only to discard the reply.
+		return bareServerResultOwnership{
+			kind: bareServerResultLateExternalService, generation: generation,
+			management: management,
+		}, nil
+	}
 	if !retained || !validExternalServiceQueryReplay(record, local.String(), server.String(), meshID) {
+		stage := "unowned_other"
+		switch {
+		case strings.HasPrefix(iq.ID, "cynapsa-peer-authorize-"):
+			stage = "unowned_peer_authorize"
+		case strings.HasPrefix(iq.ID, "cynapsa-revoke-applied-"):
+			stage = "unowned_revoke_applied"
+		case strings.HasPrefix(iq.ID, "cynapsa-"):
+			stage = "unowned_cynapsa"
+		}
+		emitRank2Evidence(rank2EvidenceRecord{Event: "bare_server_result_rejected", Source: "control", Stage: stage}, ErrAuthentication)
 		clearStanzaOwned(&record)
 		return bareServerResultOwnership{}, ErrAuthentication
 	}
@@ -2440,10 +2618,12 @@ func (s *melliumSession) handleJingleIQError(ctx context.Context, source xml.Tok
 	}
 	local, err := jid.Parse(s.username + "/" + s.boundResource())
 	if err != nil || local.Resourcepart() == "" || iq.To.String() != local.String() {
+		emitInboundAuthRejection(ctx, outer, "jingle_error_target")
 		return ErrAuthentication
 	}
 	server, err := jid.Parse(local.Domainpart())
 	if err != nil || iq.From.String() != server.String() || iq.From.Localpart() != "" || iq.From.Resourcepart() != "" {
+		emitInboundAuthRejection(ctx, outer, "jingle_error_source")
 		return ErrAuthentication
 	}
 	if iqType, ok := validCorrelatedIQAttrs(outer.Attr, iq.ID, server, local); !ok || iqType != stanza.ErrorIQ {
@@ -2454,6 +2634,7 @@ func (s *melliumSession) handleJingleIQError(ctx context.Context, source xml.Tok
 	}
 	issued, issuedOK := s.lookupIssuedJingle(iq.ID)
 	if !issuedOK || issued.from != iq.To.String() {
+		emitInboundAuthRejection(ctx, outer, "jingle_error_unowned")
 		return ErrAuthentication
 	}
 	s.mu.Lock()
@@ -2478,58 +2659,63 @@ func (s *melliumSession) handleJingleIQError(ctx context.Context, source xml.Tok
 }
 
 func decodeJingleIQError(source xml.TokenReader, outer xml.StartElement) error {
+	_, err := decodeJingleIQErrorCondition(source, outer)
+	return err
+}
+
+func decodeJingleIQErrorCondition(source xml.TokenReader, outer xml.StartElement) (string, error) {
 	children := &outerBoundaryTokenReader{source: source, outer: outer.Name}
 	bounded, err := newStanzaBudget(children, outer, maximumJingleIQErrorBytes)
 	if err != nil {
-		return ErrProtocol
+		return "", ErrProtocol
 	}
 	reader := &privateIQTokenReader{source: bounded, remaining: maximumJingleIQErrorTokens}
 	token, err := nextJingleIQErrorToken(reader)
 	errorStart, ok := token.(xml.StartElement)
 	if err != nil || !ok || errorStart.Name.Local != "error" || errorStart.Name.Space != "" && errorStart.Name.Space != stanza.NSClient || !validPrivateIQErrorAttrs(errorStart.Attr) {
-		return ErrProtocol
+		return "", ErrProtocol
 	}
 	token, err = nextJingleIQErrorToken(reader)
 	condition, ok := token.(xml.StartElement)
 	if err != nil || !ok || condition.Name.Space != "urn:ietf:params:xml:ns:xmpp-stanzas" || !validJingleIQErrorCondition(condition.Name.Local) || !onlyNamespaceAttr(condition.Attr, condition.Name.Space) {
-		return ErrProtocol
+		return "", ErrProtocol
 	}
 	token, err = nextJingleIQErrorToken(reader)
 	if err != nil || token != condition.End() {
-		return ErrProtocol
+		return "", ErrProtocol
 	}
 	token, err = nextJingleIQErrorToken(reader)
 	if textStart, hasText := token.(xml.StartElement); hasText {
 		if textStart.Name != (xml.Name{Space: "urn:ietf:params:xml:ns:xmpp-stanzas", Local: "text"}) || !validJingleIQErrorTextAttrs(textStart.Attr) {
-			return ErrProtocol
+			return "", ErrProtocol
 		}
 		textBytes := 0
 		for {
 			token, err = reader.Token()
 			if err != nil {
-				return ErrProtocol
+				return "", ErrProtocol
 			}
 			if end, isEnd := token.(xml.EndElement); isEnd {
 				if end != textStart.End() || textBytes == 0 {
-					return ErrProtocol
+					return "", ErrProtocol
 				}
 				break
 			}
 			chars, isText := token.(xml.CharData)
 			if !isText || len(chars) == 0 || textBytes > maximumJingleIQErrorText-len(chars) {
-				return ErrProtocol
+				return "", ErrProtocol
 			}
 			textBytes += len(chars)
 		}
 		token, err = nextJingleIQErrorToken(reader)
 	}
 	if err != nil || token != errorStart.End() {
-		return ErrProtocol
+		return "", ErrProtocol
 	}
 	if token, err = nextJingleIQErrorToken(reader); err != io.EOF || token != nil || !children.done {
-		return ErrProtocol
+		return "", ErrProtocol
 	}
-	return nil
+	return condition.Name.Local, nil
 }
 
 func nextJingleIQErrorToken(reader xml.TokenReader) (xml.Token, error) {
@@ -2758,7 +2944,11 @@ func decodeMembershipChanged(source xml.TokenReader, outer xml.StartElement, bud
 	if err != nil {
 		return ErrProtocol
 	}
-	decoder := xml.NewTokenDecoder(bounded)
+	return decodeMembershipChangedBody(bounded, children)
+}
+
+func decodeMembershipChangedBody(reader xml.TokenReader, children *outerBoundaryTokenReader) error {
+	decoder := xml.NewTokenDecoder(reader)
 	var value struct {
 		XMLName          xml.Name
 		SnapshotRequired string        `xml:"snapshot-required,attr"`
@@ -2911,6 +3101,7 @@ func (s *melliumSession) handleServerPing(ctx context.Context, t xmlstream.Token
 	}
 	bound, err := jid.Parse(s.username)
 	if err != nil || iq.From.Domainpart() != bound.Domainpart() || iq.To.String() != s.username+"/"+s.boundResource() || iq.ID == "" || !validServerPingIQAttributes(outer.Attr) {
+		emitInboundAuthRejection(ctx, outer, "server_ping_envelope")
 		return ErrAuthentication
 	}
 	if err = decodeExactServerPing(t, outer, s.config.StanzaBudgetBytes); err != nil {
@@ -3019,6 +3210,9 @@ func validServerPingPayloadAttributes(attributes []xml.Attr) bool {
 }
 
 func (s *melliumSession) handleMessage(ctx context.Context, t xmlstream.TokenReadEncoder, outer xml.StartElement, message stanza.Message) error {
+	if message.Type == stanza.ErrorMessage && message.From.Localpart() == "" && message.From.Resourcepart() == "" {
+		return s.handleServerMessageError(ctx, t, outer, message)
+	}
 	if s.custodyMessageRoute(message) {
 		messageID, err := decodeCustodyAcceptedBounded(t, outer, s.config.StanzaBudgetBytes)
 		if err != nil || message.ID != messageID || !validReadinessTyped(messageID, "msg_", 16) {
@@ -3045,6 +3239,7 @@ func (s *melliumSession) handleMessage(ctx context.Context, t xmlstream.TokenRea
 		return nil
 	}
 	if !s.acceptPeerResource(message.From.Resourcepart()) || message.To.String() != s.username+"/"+s.boundResource() {
+		emitInboundAuthRejection(ctx, outer, "peer_message_address")
 		return ErrAuthentication
 	}
 	frame, err := decodeMelliumMessageFrameBounded(t, outer, s.config.StanzaBudgetBytes)

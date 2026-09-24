@@ -41,9 +41,7 @@ _LOCAL_DIAGNOSTICS = {
     "event_queue_full": "The bounded application event queue is full",
     "handler_error": "The application handler failed",
     "handler_dispatch_failed": "The application handler could not be dispatched",
-    "handler_not_found": (
-        "No application handler owns this message; delivery remains unaccepted"
-    ),
+    "handler_not_found": "No application handler owns this message",
     "handler_queue_full": "The bounded application handler queue is full",
     "payload_too_large": "The inbound payload exceeds the configured limit",
 }
@@ -85,6 +83,12 @@ class _DispatchItem:
     handler: Callable[[Any], Any]
     accepted: threading.Event
     accept_succeeded: bool = False
+
+
+def _missing_handler(_request: Any) -> None:
+    raise RPCException(
+        404, code="not_found", detail="No application handler exists for this path"
+    )
 
 
 class InboundRuntime:
@@ -299,10 +303,11 @@ class InboundRuntime:
                     message_id=event.payload.message_id,
                 )
                 continue
-            handler = self._wait_for_handler(event.payload.payload.path, event=event)
+            with self._handlers_lock:
+                handler = self._handler_for_locked(event.payload.payload.path)
             if handler is None:
-                self._forget(event.event_id)
-                return
+                self._report_missing_handler(event)
+                handler = _missing_handler
             item = _DispatchItem(
                 event,
                 event.payload,
@@ -338,21 +343,6 @@ class InboundRuntime:
             message_id=event.payload.message_id,
         )
 
-    def _wait_for_handler(
-        self, path: str, *, event: AztmEvent | None = None
-    ) -> Callable[[Any], Any] | None:
-        reported = False
-        with self._handlers_changed:
-            while not self._stop.is_set():
-                handler = self._handler_for_locked(path)
-                if handler is not None:
-                    return handler
-                if not reported and event is not None:
-                    self._report_missing_handler(event)
-                    reported = True
-                self._handlers_changed.wait(0.05)
-        return None
-
     def _consume_diagnostics(self) -> None:
         core = self._owner.core
         while not self._stop.is_set() and core is not None:
@@ -383,7 +373,8 @@ class InboundRuntime:
                 result = await result
         except RPCException as exc:
             if item.message.mode != "rpc":
-                self._handler_failed(item)
+                if item.handler is not _missing_handler:
+                    self._handler_failed(item)
                 return
             try:
                 response = CynapsaResponse.from_rpc_exception(exc)
@@ -442,7 +433,8 @@ class InboundRuntime:
                 result = asyncio.run(self._await_handler(result))
         except RPCException as exc:
             if item.message.mode != "rpc":
-                self._handler_failed(item)
+                if item.handler is not _missing_handler:
+                    self._handler_failed(item)
                 return
             try:
                 response = CynapsaResponse.from_rpc_exception(exc)

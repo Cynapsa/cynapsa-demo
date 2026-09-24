@@ -4,13 +4,16 @@ import json
 import os
 import queue
 import signal
-import stat
 import threading
 from pathlib import Path
 from typing import Any
 
 import cynapsa
 
+MESH_ENDPOINT = os.environ.get("CYNAPSA_MESH_ENDPOINT", "10.240.70.2:5222")
+MESH_ID = os.environ.get("CYNAPSA_MESH_ID", "simple-e2e")
+NATIVE_SERVER = "native-server@mesh.test"
+MONKEY_SERVER = "monkey-server@mesh.test"
 NATIVE_ORIGIN = "https://native-server.test"
 MONKEY_ORIGIN = "https://monkey-server.test"
 ROUTE = "/reverse"
@@ -30,30 +33,6 @@ def required(name: str) -> str:
     return value
 
 
-NATIVE_SERVER = os.environ.get("CYNAPSA_NATIVE_SERVER_AGENT_ID", "")
-MONKEY_SERVER = os.environ.get("CYNAPSA_MONKEY_SERVER_AGENT_ID", "")
-
-
-def _enrollment_token(path_value: str) -> str:
-    path = Path(path_value)
-    try:
-        file_status = path.lstat()
-        if stat.S_ISLNK(file_status.st_mode) or not stat.S_ISREG(file_status.st_mode):
-            raise RuntimeError("CYNAPSA_ENROLLMENT_TOKEN_FILE must be a regular file")
-        if stat.S_IMODE(file_status.st_mode) & 0o077:
-            raise RuntimeError(
-                "CYNAPSA_ENROLLMENT_TOKEN_FILE must not be accessible by group or others"
-            )
-        token = path.read_text(encoding="utf-8").rstrip("\r\n")
-    except RuntimeError:
-        raise
-    except (OSError, UnicodeError) as exc:
-        raise RuntimeError("CYNAPSA_ENROLLMENT_TOKEN_FILE could not be read") from exc
-    if not token:
-        raise RuntimeError("CYNAPSA_ENROLLMENT_TOKEN_FILE must be nonempty")
-    return token
-
-
 def configured_rpc_timeout_ms() -> int:
     raw = os.environ.get("CYNAPSA_E2E_RPC_TIMEOUT_MS")
     if raw is None:
@@ -70,26 +49,27 @@ def configured_rpc_timeout_ms() -> int:
 
 
 def auth(*, timeout_ms: int | None = None) -> dict[str, Any]:
-    required("CYNAPSA_NATIVE_SERVER_AGENT_ID")
-    required("CYNAPSA_MONKEY_SERVER_AGENT_ID")
     command_timeout_ms = DEFAULT_TIMEOUT_MS if timeout_ms is None else timeout_ms
     rpc_timeout_ms = (
         configured_rpc_timeout_ms() if timeout_ms is None else timeout_ms
     )
-    configuration: dict[str, Any] = {
-        "mesh_id": required("CYNAPSA_MESH_ID"),
-        "profile_id": required("CYNAPSA_PROFILE_ID"),
+    token_file = os.environ.get("CYNAPSA_E2E_TOKEN_FILE")
+    if token_file:
+        # The runtime-v2 profile mounts only this agent's disposable grant.
+        return {
+            "enrollment_token": Path(token_file).read_text(encoding="ascii").strip(),
+            "mesh_id": MESH_ID,
+            "command_timeout_ms": command_timeout_ms,
+            "rpc_timeout_ms": rpc_timeout_ms,
+        }
+    return {
+        "mesh_endpoint": MESH_ENDPOINT,
+        "username": required("CYNAPSA_USERNAME"),
+        "password": required("CYNAPSA_PASSWORD"),
+        "mesh_id": MESH_ID,
         "command_timeout_ms": command_timeout_ms,
         "rpc_timeout_ms": rpc_timeout_ms,
     }
-    token_file = os.environ.get("CYNAPSA_ENROLLMENT_TOKEN_FILE", "")
-    if token_file:
-        secret_box = [_enrollment_token(token_file)]
-        try:
-            configuration["enrollment_token"] = secret_box.pop()
-        finally:
-            secret_box.clear()
-    return configuration
 
 
 def allow_mesh_traffic(owner: Any) -> None:

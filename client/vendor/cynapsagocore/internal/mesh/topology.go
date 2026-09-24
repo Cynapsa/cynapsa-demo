@@ -127,6 +127,104 @@ func NewTopology(capacity int, meshID string, now func() time.Time) (*Topology, 
 	return topology, nil
 }
 
+// InitializeLocalAuthority publishes only the authenticated local endpoint.
+// No group snapshot or remote membership is inferred at login.
+func (topology *Topology) InitializeLocalAuthority(ctx context.Context, local Identity) error {
+	if topology == nil || ctx == nil || !validAuthorityIdentity(local) {
+		return ErrInvalidIdentity
+	}
+	if err := topology.gate.lock(ctx); err != nil {
+		return err
+	}
+	defer topology.gate.unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	topology.byAgent = map[string][]Identity{local.AgentID: {local}}
+	topology.byInternal = map[string]Identity{local.Internal: local}
+	topology.pending = nil
+	topology.authority.Store(&topologyAuthorityToken{})
+	topology.notifyAuthorityChanged()
+	return nil
+}
+
+// ClearDynamicAuthority retains no peer addresses after a disconnect. The
+// admission token remains blocked until a new authenticated login initializes
+// the local identity again.
+func (topology *Topology) ClearDynamicAuthority(ctx context.Context) error {
+	if topology == nil || ctx == nil {
+		return ErrSnapshotInvalid
+	}
+	topology.BlockAdmission()
+	if err := topology.gate.lock(ctx); err != nil {
+		return err
+	}
+	defer topology.gate.unlock()
+	topology.byAgent = make(map[string][]Identity)
+	topology.byInternal = make(map[string]Identity)
+	topology.pending = nil
+	return nil
+}
+
+// AddDynamicPeer publishes one endpoint approved by an authenticated server
+// handshake. It must not be called with caller-supplied identity evidence.
+func (topology *Topology) AddDynamicPeer(ctx context.Context, identity Identity) error {
+	if topology == nil || ctx == nil || !validAuthorityIdentity(identity) {
+		return ErrInvalidIdentity
+	}
+	if err := topology.gate.lock(ctx); err != nil {
+		return err
+	}
+	defer topology.gate.unlock()
+	if topology.authorityBlocked() {
+		return ErrSnapshotStale
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, exists := topology.byInternal[identity.Internal]; exists {
+		return nil
+	}
+	if len(topology.byInternal) >= topology.capacity {
+		return ErrDirectoryCapacity
+	}
+	topology.byInternal[identity.Internal] = identity
+	topology.byAgent[identity.AgentID] = append(topology.byAgent[identity.AgentID], identity)
+	sort.Slice(topology.byAgent[identity.AgentID], func(i, j int) bool {
+		return topology.byAgent[identity.AgentID][i].Internal < topology.byAgent[identity.AgentID][j].Internal
+	})
+	return nil
+}
+
+// RemoveDynamicPeer removes only one exact endpoint. A newer session of the
+// same installation is never removed by an old generation's revoke.
+func (topology *Topology) RemoveDynamicPeer(ctx context.Context, identity Identity) error {
+	if topology == nil || ctx == nil || !validAuthorityIdentity(identity) {
+		return ErrInvalidIdentity
+	}
+	if err := topology.gate.lock(ctx); err != nil {
+		return err
+	}
+	defer topology.gate.unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	delete(topology.byInternal, identity.Internal)
+	current := topology.byAgent[identity.AgentID]
+	for index, candidate := range current {
+		if candidate.Internal == identity.Internal {
+			current = append(current[:index], current[index+1:]...)
+			break
+		}
+	}
+	if len(current) == 0 {
+		delete(topology.byAgent, identity.AgentID)
+	} else {
+		topology.byAgent[identity.AgentID] = current
+	}
+	return nil
+}
+
 func (topology *Topology) Replace(snapshot AuthoritativeGroupSnapshot) error {
 	return topology.replace(context.Background(), snapshot)
 }

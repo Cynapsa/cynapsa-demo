@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record an exact digest manifest for the Core source used by the E2E build."""
+"""Record an exact digest manifest for a source checkout used by the E2E build."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def _git(root: Path, *args: str) -> bytes:
     ).stdout
 
 
-def build_manifest(root: Path) -> dict[str, object]:
+def build_manifest(root: Path, repository: str = "https://github.com/Cynapsa/cynapsagocore") -> dict[str, object]:
     root = root.resolve(strict=True)
     names = _git(
         root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
@@ -41,7 +41,7 @@ def build_manifest(root: Path) -> dict[str, object]:
             data = path.read_bytes()
             kind = "file"
         else:
-            raise RuntimeError(f"unsupported Core source entry: {relative}")
+            raise RuntimeError(f"unsupported source entry: {relative}")
         files.append(
             {
                 "path": relative,
@@ -56,7 +56,7 @@ def build_manifest(root: Path) -> dict[str, object]:
     ).encode("utf-8")
     return {
         "schema_version": 1,
-        "repository": "https://github.com/Cynapsa/cynapsagocore",
+        "repository": repository,
         "head": _git(root, "rev-parse", "HEAD").decode().strip(),
         "branch": _git(root, "branch", "--show-current").decode().strip(),
         "status_porcelain_v1": _git(
@@ -68,9 +68,12 @@ def build_manifest(root: Path) -> dict[str, object]:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: record_core_provenance.py CORE_CHECKOUT OUTPUT")
-    manifest = build_manifest(Path(sys.argv[1]))
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("usage: record_core_provenance.py CHECKOUT OUTPUT [REPOSITORY_URL]")
+    manifest = build_manifest(
+        Path(sys.argv[1]),
+        sys.argv[3] if len(sys.argv) == 4 else "https://github.com/Cynapsa/cynapsagocore",
+    )
     Path(sys.argv[2]).write_text(
         json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
         encoding="utf-8",

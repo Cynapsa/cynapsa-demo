@@ -113,7 +113,10 @@ func (factory *builtInConnectivityFactory) Create(ctx context.Context, build ses
 			snapshot, failure := build.Auth.CredentialSource.Snapshot(ctx)
 			if failure != nil {
 				clearSecret(snapshot.Password)
-				return rank2xmpp.Credential{}, rank2xmpp.ErrAuthentication
+				// A local credential-source failure, including expiry while a
+				// renewal is in progress, is not a server login denial.
+				// Retain the sender outbox for a later credential retry.
+				return rank2xmpp.Credential{}, rank2xmpp.ErrUnavailable
 			}
 			return rank2xmpp.Credential{Password: snapshot.Password, UsableUntil: snapshot.UsableUntil}, nil
 		}
@@ -124,6 +127,7 @@ func (factory *builtInConnectivityFactory) Create(ctx context.Context, build ses
 	}
 	client, err := rank2xmpp.NewClient(rank2xmpp.Config{
 		Endpoint:                       build.Auth.MeshEndpoint,
+		DynamicPeerAuthority:           true,
 		Auth:                           rank2xmpp.Authentication{Username: build.Auth.Username, Password: password, MeshID: build.Auth.MeshID, SessionResource: build.Auth.SessionResource},
 		ReceiveCapacity:                queueCapacity,
 		TransferWorkers:                workerCount,

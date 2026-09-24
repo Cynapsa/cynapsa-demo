@@ -161,6 +161,23 @@ func (store *MemoryStore) Delete(messageID string) error {
 	return nil
 }
 
+// retireServerRejected uses a validated server-originated routing error as
+// terminal evidence. Unlike local deletion it may retire a Rank1/Rank2-owned
+// entry; an active borrower keeps its bytes until its reservation is released.
+func (store *MemoryStore) retireServerRejected(messageID string) error {
+	if store == nil || messageID == "" {
+		return ErrUnknownEntry
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	ordinal, _, err := store.findMessageLocked(messageID)
+	if err != nil {
+		return err
+	}
+	store.retireOrdinalLocked(ordinal)
+	return nil
+}
+
 func (store *MemoryStore) deleteUnowned(messageID string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -565,6 +582,21 @@ func (store *MemoryStore) retireRank2(messageID string, transportOrdinal uint64)
 	store.resolveDropLocked(&entry, ErrOwnedEntry)
 	store.byOrdinal[ordinal] = entry
 	store.deleteOrdinalLocked(ordinal)
+	return nil
+}
+
+func (store *MemoryStore) releaseRank2(messageID string, transportOrdinal uint64) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	ordinal, entry, err := store.findMessageLocked(messageID)
+	if err != nil {
+		return err
+	}
+	if transportOrdinal == 0 || entry.rank2Ordinal != transportOrdinal || entry.rank1Pending != nil {
+		return ErrInvalidEvidence
+	}
+	entry.rank2Ordinal = 0
+	store.byOrdinal[ordinal] = entry
 	return nil
 }
 

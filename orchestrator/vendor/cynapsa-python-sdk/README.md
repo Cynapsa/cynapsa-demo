@@ -111,13 +111,22 @@ HTTP-style method, path, query, ordered duplicate-preserving headers, and exact
 body bytes. Native shorthand accepts exact bytes, strings, and strict
 JSON-compatible values; arbitrary Python objects are not serialized.
 
-`session.request()` returns `CynapsaResponse`, containing status, reason,
-ordered duplicate-preserving headers, exact body bytes, and optional safe
-application-error metadata. Use `.content`, `.text()`, `.json()`, and the
-explicit `.raise_for_error()` helper. Remote 4xx/5xx application responses do
-not raise automatically. Transport and Core failures still raise SDK errors.
-Error metadata is carried in its own canonical field and never reserves or
-consumes an application header name.
+On success, native `session.request()` returns `CynapsaResponse`, containing
+status, reason, ordered duplicate-preserving headers, and exact body bytes.
+A remote 4xx/5xx response raises `RemoteNativeError` (a `NativeError`), with
+the canonical application error code/detail when available. Its `.response`
+retains the complete, dependency-free `CynapsaResponse`—not a library HTTP
+object. An intermediate native handler may explicitly `return error.response`
+to forward the status, headers, body, and safe error metadata; unhandled errors
+still become sanitized `500 handler_error` replies. Monkeypatched HTTP callers
+receive the corresponding library-native HTTP outcome instead: `requests` and `httpx`
+return 404 responses, while `urllib.request.urlopen()` raises `HTTPError`.
+Forwarding is explicit and crosses a trust boundary: filter sensitive headers
+(such as `set-cookie` or `authorization`), hop-by-hop headers, and private body
+details before returning an upstream response to a different caller. Use a new
+`CynapsaResponse` or raise `RPCException` when a sanitized error is appropriate.
+The wire response is the same regardless of the caller. Error metadata is a
+separate canonical field and never reserves an application header name.
 
 The asynchronous surface has the same semantics:
 
@@ -173,11 +182,15 @@ sanitized `500 handler_error`; raw exception text never crosses the mesh. For a
 msg, the handler still runs, but every return value is discarded and exceptions
 remain local—no response is created or transmitted.
 
-`delivery.accept` is submitted only after strict event decoding, route
-ownership, and successful placement in the bounded handler queue, and before
+`delivery.accept` is submitted only after strict event decoding, selection of
+either a registered route or its missing-route response, and successful
+placement in the bounded handler queue, and before
 the handler is invoked. It transfers local flow-control responsibility. It is
 not a remote receipt, an application acknowledgement, or evidence that the
-handler completed. Unowned and queue-blocked deliveries remain unaccepted.
+handler completed. An unmatched native RPC path is accepted and receives a
+canonical `404 not_found` response; later handler registration affects only
+later deliveries. Unmatched one-way messages have no remote reply. Queue-blocked
+deliveries remain unaccepted until admitted.
 
 Use `next_event()`, `next_diagnostic()`, and `next_local_diagnostic()` for the
 separate immutable event streams. `session.off()` removes an exact
@@ -268,9 +281,11 @@ mapping, while `response.raw.headers.getlist(name)` retains exact duplicates.
 forced `Connection: close`, and bytes-like `data`. It returns the standard
 buffered file-style response interface (`read`, `readinto`, line iteration,
 metadata accessors, and context-managed close); `fileno()` is unsupported for
-the in-memory body. Canonical 4xx and 5xx results are returned through that
-response interface rather than raised as `HTTPError`, consistently with the
-bridge's response-returning contract. Streaming, iterable, text, and file-like
+the in-memory body. Canonical 304 and 4xx/5xx results raise
+`urllib.error.HTTPError`, whose body and headers remain readable. Standard
+redirects are followed only within the same mapped virtual origin (up to ten
+hops); cross-origin or unmapped redirects raise `HTTPError` without opening an
+ordinary network connection. Streaming, iterable, text, and file-like
 mapped bodies fail locally. Userinfo and fragments are invalid on mapped URLs
 and fail locally instead of escaping to the network. Unmapped calls delegate
 unchanged to the original `urlopen`.
@@ -357,12 +372,11 @@ as the command and a later `--` for script arguments. The other login
 configuration flags mirror `login()`: `--mesh-id`, `--profile-id`, repeated
 `--map ORIGIN RECIPIENT rpc|msg`, `--command-timeout-ms`, `--rpc-timeout-ms`,
 `--queue-limit`, and `--payload-limit`. Repeated `--allow AGENT PATH` options
-remain available as an explicit application-policy override. They atomically
-replace Core's temporary wildcard-allow default with exactly those rules
+replace Core's fail-closed application policy with exactly those allow rules
 before application code starts. Use the literal `*` for either wildcard; the
-CLI translates it to Core's empty selector. A failed policy installation
-prevents the target from running. The manual demo supplies `--allow '*' '*'`
-explicitly so every same-mesh application request is admitted for now.
+CLI translates it to Core's empty selector. Omitting `--allow` leaves the
+fail-closed policy unchanged, and a failed policy installation prevents the
+target from running.
 
 When the target imports FastAPI, `cynapsa run` installs a CLI-only FastAPI
 lifespan hook before user code. On the actual root FastAPI ASGI lifespan call,
@@ -377,7 +391,7 @@ does not attempt load balancing or cross-worker hook propagation.
 This makes a regular FastAPI or Requests program runnable without importing
 Cynapsa. For example, `cynapsa run [Cynapsa options] -- uvicorn package:app`
 discovers the FastAPI app at lifespan startup, while mapped Requests calls are
-intercepted in the same process.
+intercepted in the same process. Policy remains explicit in both cases.
 
 ## Lifecycle
 

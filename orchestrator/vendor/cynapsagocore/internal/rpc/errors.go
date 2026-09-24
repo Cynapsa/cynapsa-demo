@@ -19,4 +19,5 @@ var (
 	ErrInvalidLease          = errors.New("rpc: invalid reply lease")
 	ErrIssuanceExhausted     = errors.New("rpc: process-lifetime identity issuance exhausted")
 	ErrAuthorizationRejected = errors.New("rpc: current mesh membership rejected")
+	ErrServerUnavailable     = errors.New("rpc: server could not route the request")
 )

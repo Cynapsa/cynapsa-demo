@@ -84,6 +84,18 @@ func (service *MessagingService) receiveThroughPeerLaneMode(ctx context.Context,
 		closeInboundRank1Receipt(receipt)
 		return &Failure{Code: FailureRejected}
 	}
+	if service.peerResolver != nil {
+		// Check the carrier/envelope binding before asking the server about an
+		// exact endpoint. Envelope text is never authorization evidence.
+		if envelope.Sender != provenance.Sender() || envelope.Recipient != provenance.Recipient() || envelope.MeshID != provenance.MeshID() || envelope.Recipient != service.identity.BoundFull() || envelope.MeshID != service.identity.MeshID() {
+			closeInboundRank1Receipt(receipt)
+			return &Failure{Code: FailureRejected}
+		}
+		if failure := service.ensureExactDynamicPeer(ctx, provenance.Sender()); failure != nil {
+			closeInboundRank1Receipt(receipt)
+			return failure
+		}
+	}
 	owned := envelope.Clone()
 	ownedReceipt := receipt
 	var receiveFailure atomic.Pointer[Failure]

@@ -518,7 +518,7 @@ func canonicalTerminalCause(cause error) (error, bool) {
 	if cause == nil {
 		return nil, false
 	}
-	for _, sentinel := range []error{ErrExpired, ErrCancelled, ErrAuthorizationRejected, ErrCapacity, ErrInvalidResponse} {
+	for _, sentinel := range []error{ErrExpired, ErrCancelled, ErrAuthorizationRejected, ErrServerUnavailable, ErrCapacity, ErrInvalidResponse} {
 		if errors.Is(cause, sentinel) {
 			return sentinel, true
 		}
@@ -739,6 +739,33 @@ func (t *OutboundTable) FailAll(cause error) int {
 // replaced; a result already received by its waiter cannot be retracted.
 func (t *OutboundTable) FailPeer(meshID, peerID string) int {
 	return len(t.FailPeerCorrelations(meshID, peerID))
+}
+
+// FailMessageID resolves only the request named by a trusted server routing
+// error. A queued response may be replaced, but one already taken by its
+// waiter cannot be retracted. The caller owns any separately decoded value.
+func (t *OutboundTable) FailMessageID(messageID string, cause error) string {
+	canonical, ok := canonicalTerminalCause(cause)
+	if t == nil || messageID == "" || !ok {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for correlation, entry := range t.entries {
+		if entry.request.MessageID != messageID && (entry.terminalResult == nil || entry.terminalResult.envelope.ReplyTo != messageID) {
+			continue
+		}
+		if entry.terminal && (!entry.payloadOwned || entry.waiting && len(entry.done) == 0) {
+			return ""
+		}
+		if entry.terminal {
+			t.replaceTerminalErrorLocked(correlation, entry, canonical)
+		} else {
+			t.finishErrorLocked(correlation, entry, canonical)
+		}
+		return correlation
+	}
+	return ""
 }
 
 // FailPeerCorrelations returns the bounded scalar keys whose terminal result

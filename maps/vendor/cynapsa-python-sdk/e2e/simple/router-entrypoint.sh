@@ -29,11 +29,6 @@ create_vlan 106 10.240.60.1/24
 create_vlan 107 10.240.70.1/24
 create_vlan 108 10.240.80.1/24
 create_vlan 109 10.240.90.1/24
-create_vlan 110 10.240.100.1/24
-create_vlan 111 10.240.110.1/24
-create_vlan 112 10.240.120.1/24
-create_vlan 113 10.240.130.1/24
-create_vlan 114 10.240.140.1/24
 ip addr del "$trunk_address" dev eth0
 ip route flush dev eth0
 ip link set eth0 addrgenmode none

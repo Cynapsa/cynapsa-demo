@@ -469,7 +469,6 @@ func TestBareServerResultDispatchRequiresExactCurrentOwner(t *testing.T) {
 		"resume-prefix-only": resumeAuthorityIDPrefix + "time-attack",
 		"time-prefix-only":   entityTimeIDPrefix + "short",
 		"discovery":          authorityDiscoveryIDPrefix + strings.Repeat("B", privateIQRandomLength),
-		"other-correlated":   externalServiceIDPrefix + strings.Repeat("C", externalServiceRandomLength),
 	} {
 		t.Run(name, func(t *testing.T) {
 			outer, iq, _ := resumeAuthorityWire(t, id, "example.test", "agent@example.test/mesh", "ready")
@@ -478,10 +477,34 @@ func TestBareServerResultDispatchRequiresExactCurrentOwner(t *testing.T) {
 			}
 		})
 	}
+	lateOuter, lateIQ, _ := resumeAuthorityWire(t, externalServiceIDPrefix+strings.Repeat("C", externalServiceRandomLength), "example.test", "agent@example.test/mesh", "ready")
+	if late, classifyErr := session.classifyBareServerResult(ctx, lateOuter, lateIQ); classifyErr != nil || late.kind != bareServerResultLateExternalService {
+		t.Fatalf("late XEP-0215 result owner=%v error=%v", late.kind, classifyErr)
+	}
 
 	stale := context.WithValue(context.Background(), melliumSessionGenerationKey{}, uint64(6))
 	if got, classifyErr := session.classifyBareServerResult(stale, resumeOuter, resumeIQ); got.kind != bareServerResultUnowned || !errors.Is(classifyErr, ErrProtocol) {
 		t.Fatalf("stale owner=%v error=%v", got.kind, classifyErr)
+	}
+}
+
+func TestLateExternalServiceResultIsDiscardedWithoutClosingStream(t *testing.T) {
+	session, ctx, _ := resumeAuthorityTestSession(t)
+	id := externalServiceIDPrefix + strings.Repeat("C", externalServiceRandomLength)
+	outer, _, _ := resumeAuthorityWire(t, id, "example.test", "agent@example.test/mesh", "ready")
+	child := []byte(`<services xmlns="urn:xmpp:extdisco:2"/>`)
+	wire := &qaTokenReadEncoder{
+		decoder: melliumIQChildDecoder(t, child, outer),
+		encoder: xml.NewEncoder(io.Discard),
+	}
+	if err := session.handleElement(ctx, wire, &outer); err != nil {
+		t.Fatalf("late XEP-0215 result closed stream: %v", err)
+	}
+	if handled := session.management.HandledInbound(); handled != 1 {
+		t.Fatalf("handled inbound=%d; want 1", handled)
+	}
+	if session.suspended {
+		t.Fatal("late XEP-0215 result suspended stream")
 	}
 }
 

@@ -22,13 +22,18 @@ container entirely from that directory when its local image is missing. No
 credentials, enrollment tokens, or Cynapsa installation profiles are committed
 to this repository.
 
+The `remove-snapshot-local-demo` branch bundles the matching `remove-snapshot`
+SDK and Go Core worktree snapshots in all three directories. These builds
+require an ejabberd authority with the matching peer-handshake protocol; they
+are not compatible with a server still running the old snapshot protocol.
+
 ## Run one identity
 
 Clone the repository, enter the identity directory, and create its ignored
 environment file. For example, to run the client:
 
 ```sh
-git clone https://github.com/Cynapsa/cynapsa-demo.git
+git clone --branch remove-snapshot-local-demo https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo/client
 cp .env.example .env
 # Edit .env and replace the placeholders.
@@ -45,7 +50,18 @@ removed from `.env` afterward.
 An entity's own agent identity is always resolved by Enrollment and stored by
 Go Core. It is never accepted as local configuration.
 
-Use the same flow in [`orchestrator/`](orchestrator/) and [`maps/`](maps/).
+The Dockerfiles contain no enrollment credential. On a new state volume,
+`run.sh` passes `CYNAPSA_TOKEN` from that directory's ignored `.env` (or an
+explicit shell environment override) into the container. Its entrypoint writes
+the token to a private runtime file, uses it once for enrollment, and retains
+the encrypted profile in the named volume. A saved profile takes precedence
+over a later token; use a new volume to test another installation.
+
+For an all-local run, start [`maps/`](maps/) first, then
+[`orchestrator/`](orchestrator/), then [`client/`](client/). Use fresh enrollment
+tokens on empty state volumes for the two agents and the client. The two GCP
+demo worker pools are intentionally scaled to zero; no server-agent instance
+will answer until you start its local container.
 Their `.env.example` files list the API credentials they require on every run.
 
 ## Self-contained directories

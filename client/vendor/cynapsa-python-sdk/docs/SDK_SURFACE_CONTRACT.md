@@ -50,10 +50,21 @@ preserved normally. Metadata contains a bounded code, safe detail, and JSON
 object details, and is valid only with a 4xx or 5xx status. Plain 4xx/5xx
 framework responses remain valid without metadata.
 
-`.content`, `.text()`, and `.json()` expose the body. A 4xx or 5xx application
-response is returned normally. `.raise_for_error()` is an explicit opt-in that
-raises `RemoteApplicationError`; remote application errors never raise
-automatically.
+`.content`, `.text()`, and `.json()` expose a canonical response body. A
+canonical response object's `.raise_for_error()` explicitly raises
+`RemoteApplicationError`. Native `session.request()` instead automatically
+projects any remote 4xx/5xx into `RemoteNativeError` (a `NativeError`), with
+safe application error code/detail when present. The exception's `.response`
+is the complete dependency-free `CynapsaResponse`, not a library HTTP object.
+An intermediate native handler may explicitly return this response to forward
+the exact status, headers, body, and metadata; an unhandled exception instead
+becomes a sanitized `500 handler_error` response.
+Forwarding is a deliberate trust-boundary choice: an intermediary should
+remove sensitive and hop-by-hop headers and private body details before
+returning a remote response to another caller, or construct a sanitized
+`CynapsaResponse`/`RPCException` instead.
+Monkeypatched HTTP callers receive their library's normal behavior: response
+objects for `requests`/`httpx`, and `HTTPError` for `urllib.request.urlopen()`.
 
 At a monkeypatched caller, the same response becomes the intercepted library's
 normal response type. Core and transport failures remain SDK exceptions for
@@ -64,6 +75,11 @@ native calls and become appropriate library errors for monkeypatched calls.
 `session.on(path, handler)` registers one exact path. The literal `*` is the
 only catch-all. There is no handler `mode` parameter and no `any` mode. One
 handler serves both RPC and one-way delivery; the sender chooses the semantics.
+If no handler matches when a native RPC is dispatched, the SDK returns a
+canonical `404 not_found` response immediately. One-way delivery has no
+application reply. If Core rejects a `message.reply` command or the connection
+fails while replying, the SDK records a local `automatic_reply_failed`
+diagnostic; it cannot guarantee a remote error over that failed path.
 
 ```python
 @session.on("/reverse")
@@ -119,7 +135,8 @@ invalid/unsupported payload
   -> transport/Core SDK error
 
 valid remote 4xx/5xx application response
-  -> CynapsaResponse or caller-library response
+  -> native session: RemoteNativeError
+  -> HTTP hook: caller-library response or HTTPError, per library
 ```
 
 RPC expiry belongs to Go Core. Omitted or zero `ttl_ms` selects the configured

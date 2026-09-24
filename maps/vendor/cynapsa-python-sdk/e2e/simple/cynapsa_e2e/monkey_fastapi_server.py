@@ -19,3 +19,18 @@ async def reverse(request: Request) -> JSONResponse:
     print("E2E_DIAGNOSTIC=" + json.dumps(evidence, sort_keys=True), flush=True)
     text = body.decode("utf-8", errors="strict")
     return JSONResponse([text[::-1], "monkey"])
+
+
+@app.post("/rate-limit")
+async def rate_limit(request: Request) -> JSONResponse:
+    body = await request.body()
+    print(
+        "E2E_DIAGNOSTIC="
+        + json.dumps({"event": "hop-upstream", "body": body.decode("utf-8")}),
+        flush=True,
+    )
+    return JSONResponse(
+        {"error": "quota exceeded"},
+        status_code=429,
+        headers={"retry-after": "7", "x-upstream": "maps"},
+    )

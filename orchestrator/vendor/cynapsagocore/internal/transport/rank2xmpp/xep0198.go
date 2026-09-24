@@ -304,6 +304,7 @@ func (sm *StreamManagement) applyAck(handled uint32) (uint64, uint32, error) {
 	// idempotent instead of looking like a uint32-wrapped forward jump.
 	serverDelta := uint32(handled - sm.serverAcked)
 	if serverDelta >= 1<<31 {
+		emitRank2Evidence(rank2EvidenceRecord{Event: "sm_ack_rejected", Source: "sm", Stage: "server_watermark", WireGeneration: uint64(handled), ClientGeneration: uint64(sm.outbound), StateEpoch: uint64(sm.acked), SessionEpoch: uint64(sm.serverAcked), Attempt: len(sm.pending)}, ErrProtocol)
 		return 0, 0, ErrProtocol
 	}
 	delta := uint32(handled - sm.acked)
@@ -312,6 +313,7 @@ func (sm *StreamManagement) applyAck(handled uint32) (uint64, uint32, error) {
 		return 0, 0, nil
 	}
 	if uint64(delta) > uint64(len(sm.pending)) {
+		emitRank2Evidence(rank2EvidenceRecord{Event: "sm_ack_rejected", Source: "sm", Stage: "untracked_outbound", WireGeneration: uint64(handled), ClientGeneration: uint64(sm.outbound), StateEpoch: uint64(sm.acked), SessionEpoch: uint64(sm.serverAcked), Attempt: len(sm.pending)}, ErrProtocol)
 		return 0, 0, ErrProtocol
 	}
 	var ordinal uint64

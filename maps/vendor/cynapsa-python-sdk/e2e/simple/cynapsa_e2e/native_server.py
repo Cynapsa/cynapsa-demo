@@ -6,6 +6,7 @@ import sys
 import cynapsa
 
 from .settings import (
+    MONKEY_SERVER,
     ROUTE,
     allow_mesh_traffic,
     auth,
@@ -38,6 +39,36 @@ def main() -> int:
                 body_bytes=len(request.body),
             )
             return _json_response("native", request.text())
+
+        def upstream(request: cynapsa.CynapsaRequest) -> cynapsa.CynapsaResponse:
+            diagnostic("hop-intermediate", path=request.path)
+            return session.request(
+                MONKEY_SERVER,
+                cynapsa.CynapsaRequest(
+                    "POST", "/rate-limit", body=b"hop-probe",
+                ),
+            )
+
+        @session.on("/forward")
+        def forward(request: cynapsa.CynapsaRequest) -> cynapsa.CynapsaResponse:
+            try:
+                return upstream(request)
+            except cynapsa.RemoteNativeError as error:
+                return error.response
+
+        @session.on("/remap")
+        def remap(request: cynapsa.CynapsaRequest) -> cynapsa.CynapsaResponse:
+            try:
+                return upstream(request)
+            except cynapsa.RemoteNativeError as error:
+                raise cynapsa.RPCException(
+                    503, code="upstream_limited", detail="Map service is busy",
+                    headers=(("retry-after", "7"),),
+                ) from error
+
+        @session.on("/unhandled")
+        def unhandled(request: cynapsa.CynapsaRequest) -> cynapsa.CynapsaResponse:
+            return upstream(request)
 
         mark_ready()
         wait_for_stop()

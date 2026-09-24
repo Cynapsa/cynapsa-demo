@@ -49,6 +49,11 @@ type retainedInboundReceipt struct {
 	receipt InboundRank1Receipt
 }
 
+type peerResolutionAttempt struct {
+	done    chan struct{}
+	failure *Failure
+}
+
 // topologyMembershipVerifier exposes only current installed authority to the
 // policy package.
 type topologyMembershipVerifier struct{ topology *Topology }
@@ -60,23 +65,37 @@ func (verifier topologyMembershipVerifier) RequireAll(meshID string, agentIDs ..
 // MessagingService composes the Pod 3 correctness primitives without owning
 // a concrete carrier or payload implementation.
 type MessagingService struct {
-	config        MessagingConfig
-	identity      SessionIdentity
-	topology      *Topology
-	topologySrc   AuthoritativeGroupSource
-	peerAuthority PeerAuthoritySource
-	carrier       EnvelopeCarrier
-	pipeline      PayloadPipeline
-	deliveries    DeliverySink
-	policies      *PolicyController
-	gate          *policy.Gate
-	deduper       *conversation.Deduper
-	outbox        *outbox.Outbox
-	ownsOutbox    bool
-	outboundRPC   *rpc.OutboundTable
-	inboundRPC    *rpc.InboundTable
-	rpcBudget     *rpc.ByteBudget
-	handlers      *HandlerRegistry
+	config         MessagingConfig
+	identity       SessionIdentity
+	topology       *Topology
+	topologySrc    AuthoritativeGroupSource
+	peerAuthority  PeerAuthoritySource
+	peerResolver   PeerResolver
+	dynamicPeers   map[string]ResolvedPeer
+	outboundBound  map[string]string
+	suspendedPeers map[string]ResolvedPeer
+	// Protected by refreshMu. A successful authenticated rebind must explicitly
+	// confirm its actual full JID before suspended exact peers may be retried.
+	replayLocalFull string
+	replayCursor    int
+	replayRunning   atomic.Bool
+	resolvingPeers  map[string]*peerResolutionAttempt // refreshMu
+	// Even values are closed generations; the low bit is the post-publication
+	// admission capability. A fence advances the generation before cleanup.
+	dynamicPublication         atomic.Uint64
+	dynamicPublicationPrepared uint64 // refreshMu
+	carrier                    EnvelopeCarrier
+	pipeline                   PayloadPipeline
+	deliveries                 DeliverySink
+	policies                   *PolicyController
+	gate                       *policy.Gate
+	deduper                    *conversation.Deduper
+	outbox                     *outbox.Outbox
+	ownsOutbox                 bool
+	outboundRPC                *rpc.OutboundTable
+	inboundRPC                 *rpc.InboundTable
+	rpcBudget                  *rpc.ByteBudget
+	handlers                   *HandlerRegistry
 
 	mu                      sync.Mutex
 	started                 bool
@@ -121,9 +140,10 @@ type ServiceDiagnostics struct {
 }
 
 // Diagnostics captures independent bounded counters without retaining locks
-// across subsystem calls. PeerCount is the bounded complete current-authority
-// membership set, excluding the authenticated local member. It is neither an
-// all-account server roster nor live-link or reachability state.
+// across subsystem calls. PeerCount is the bounded set of locally authorized
+// exact peers, excluding the authenticated local endpoint; in dynamic mode it
+// includes only peers for which a server handshake has completed. It is not a
+// mesh roster or a live-link/reachability count.
 func (service *MessagingService) Diagnostics() ServiceDiagnostics {
 	if service == nil {
 		return ServiceDiagnostics{}
@@ -153,7 +173,7 @@ func boundedDiagnosticCount(value int) uint64 {
 }
 
 func NewMessagingService(config MessagingConfig, dependencies MessagingDependencies) (*MessagingService, error) {
-	if config.QueueCapacity < 1 || config.QueueCapacity > MaxMembershipEntries || config.OutboxByteLimit < 1 || config.OutboxByteLimit > outbox.MaxByteCapacity || config.RPCTimeout == nil || config.OperationTimeout <= 0 || config.OperationTimeout > maximumOperationTimeout || config.PeerIdleTimeout <= 0 || config.PeerIdleTimeout > maximumOperationTimeout || config.OutboxPollInterval <= 0 || config.OutboxPollInterval > maximumOperationTimeout || config.Clock == nil || (dependencies.Topology == nil) == (dependencies.PeerAuthority == nil) || dependencies.Carrier == nil || dependencies.Payloads == nil || dependencies.Deliveries == nil || dependencies.Policies == nil || dependencies.Handlers == nil {
+	if config.QueueCapacity < 1 || config.QueueCapacity > MaxMembershipEntries || config.OutboxByteLimit < 1 || config.OutboxByteLimit > outbox.MaxByteCapacity || config.RPCTimeout == nil || config.OperationTimeout <= 0 || config.OperationTimeout > maximumOperationTimeout || config.PeerIdleTimeout <= 0 || config.PeerIdleTimeout > maximumOperationTimeout || config.OutboxPollInterval <= 0 || config.OutboxPollInterval > maximumOperationTimeout || config.Clock == nil || boolCount(dependencies.Topology != nil, dependencies.PeerAuthority != nil, dependencies.PeerResolver != nil) != 1 || dependencies.Carrier == nil || dependencies.Payloads == nil || dependencies.Deliveries == nil || dependencies.Policies == nil || dependencies.Handlers == nil {
 		return nil, ErrInvalidConfig
 	}
 	clockReading := config.Clock.Snapshot()
@@ -218,7 +238,7 @@ func NewMessagingService(config MessagingConfig, dependencies MessagingDependenc
 		return nil, err
 	}
 	service := &MessagingService{
-		config: config, identity: dependencies.Identity, topology: topology, topologySrc: dependencies.Topology, peerAuthority: dependencies.PeerAuthority,
+		config: config, identity: dependencies.Identity, topology: topology, topologySrc: dependencies.Topology, peerAuthority: dependencies.PeerAuthority, peerResolver: dependencies.PeerResolver,
 		carrier: dependencies.Carrier, deliveries: dependencies.Deliveries, policies: dependencies.Policies,
 		deduper: deduper, outbox: queued, ownsOutbox: ownsOutbox, outboundRPC: outbound, inboundRPC: inbound, rpcBudget: rpcBudget, handlers: dependencies.Handlers,
 		conversations: make(map[string]*conversationState, config.QueueCapacity), responseValues: make(map[string]retainedPayload, config.QueueCapacity), inboundValues: make(map[string]retainedPayload, config.QueueCapacity),
@@ -231,6 +251,10 @@ func NewMessagingService(config MessagingConfig, dependencies MessagingDependenc
 		attemptWake:     make(map[string]uint64),
 		automaticDrain:  true,
 		inboundReceipts: make(map[string]retainedInboundReceipt, config.QueueCapacity),
+		dynamicPeers:    make(map[string]ResolvedPeer),
+		outboundBound:   make(map[string]string),
+		suspendedPeers:  make(map[string]ResolvedPeer),
+		resolvingPeers:  make(map[string]*peerResolutionAttempt),
 		receiptQueue:    make(chan InboundRank1Receipt, config.QueueCapacity),
 		receiptSlots:    make(chan struct{}, config.QueueCapacity),
 	}
@@ -290,8 +314,14 @@ func (service *MessagingService) Start(ctx context.Context) *Failure {
 	if _, failure := service.calibratedTime(); failure != nil {
 		return failure
 	}
-	if err := service.refreshTopology(ctx); err != nil {
-		return classifyContextOr(err, ctx, FailureUnavailable)
+	var authorityErr error
+	if service.peerResolver != nil {
+		authorityErr = service.InitializeLocalAuthority(ctx)
+	} else {
+		authorityErr = service.refreshTopology(ctx)
+	}
+	if authorityErr != nil {
+		return classifyContextOr(authorityErr, ctx, FailureUnavailable)
 	}
 	local, err := service.topology.LookupInternal(service.identity.BoundFull())
 	if err != nil || local.AgentID != service.identity.AgentID() {
@@ -638,6 +668,7 @@ func (service *MessagingService) runOutboxDrain(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+		service.startSuspendedPeerRetry(ctx)
 		ids := service.outbox.EligibleMessageIDs(cap(service.drainSlots))
 		for _, messageID := range ids {
 			if !service.beginDrain(messageID) {
@@ -686,6 +717,9 @@ func (service *MessagingService) runDrainAttempt(ctx context.Context, reservatio
 			_ = service.outboundRPC.Fail(envelope.CorrelationID, rpc.ErrCancelled)
 			progressed = true
 		}
+		return
+	}
+	if !service.dynamicPublicationReady() {
 		return
 	}
 	// Avoid occupying a drain worker and reservation while authority is already
@@ -933,6 +967,12 @@ func (service *MessagingService) refreshTopology(ctx context.Context) error {
 	if service == nil || ctx == nil {
 		return ErrSnapshotInvalid
 	}
+	if service.peerResolver != nil {
+		if service.topology.authorityBlocked() {
+			return ErrSnapshotStale
+		}
+		return ctx.Err()
+	}
 	service.refreshMu.Lock()
 	defer service.refreshMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -1115,7 +1155,14 @@ func (service *MessagingService) advanceAuthorityFenceEpoch() {
 // safe in the XMPP ingress callback and prevents final topology ownership
 // transfers before asynchronous cache cleanup begins.
 func (service *MessagingService) BlockAuthorityAdmission() {
-	if service == nil || !service.admitSnapshotOperation() {
+	if service == nil {
+		return
+	}
+	if service.peerResolver != nil {
+		service.closeDynamicPublication()
+		service.advanceAuthorityFenceEpoch()
+	}
+	if !service.admitSnapshotOperation() {
 		return
 	}
 	defer service.operations.Done()
@@ -1136,10 +1183,30 @@ func (service *MessagingService) lookupInternal(ctx context.Context, internal st
 }
 
 func (service *MessagingService) resolveOutboundPeer(ctx context.Context, agentID string) (Identity, error) {
+	if service.peerResolver != nil {
+		if failure := service.ensureDynamicPeer(ctx, agentID); failure != nil {
+			return Identity{}, meshFailureError(failure)
+		}
+		service.refreshMu.Lock()
+		full := service.outboundBound[agentID]
+		service.refreshMu.Unlock()
+		identity, err := service.topology.LookupInternal(full)
+		if err != nil || identity.AgentID != agentID {
+			return Identity{}, ErrSnapshotStale
+		}
+		return identity, nil
+	}
 	return service.topology.ResolveAgentContext(ctx, service.identity.MeshID(), service.identity.BoundFull(), agentID)
 }
 
 func (service *MessagingService) resolveOutboundEndpoints(ctx context.Context, agentID string) ([]Identity, error) {
+	if service.peerResolver != nil {
+		identity, err := service.resolveOutboundPeer(ctx, agentID)
+		if err != nil {
+			return nil, err
+		}
+		return []Identity{identity}, nil
+	}
 	return service.topology.ResolveAgentEndpointsContext(ctx, service.identity.MeshID(), service.identity.BoundFull(), agentID)
 }
 

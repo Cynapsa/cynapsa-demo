@@ -55,6 +55,15 @@ const (
 	StanzaObjectTransfer
 	StanzaObjectTransferFailure
 	StanzaObjectTransferAbort
+	// Private server-authorized peer lookup; never replayed on a new session.
+	StanzaPeerAuthorization
+	// Server revoke action acknowledgement after owner cleanup.
+	StanzaPeerRevocationAck
+	// Immediate IQ result for a server revoke packet. This is not proof that
+	// owner cleanup finished; that proof is StanzaPeerRevocationAck.
+	StanzaPeerRevocationPacketAck
+	// Outbound idle liveness IQ to the authenticated server domain.
+	StanzaSessionPingQuery
 )
 
 type Stanza struct {
@@ -104,6 +113,8 @@ const (
 	// completed on the dedicated control worker after every preceding replayed
 	// authority item has been processed.
 	EventResumeAuthorityResult
+	EventPeerRevoked
+	EventRoutingFailure
 )
 
 type Event struct {
@@ -116,6 +127,9 @@ type Event struct {
 	sessionGeneration uint64
 	inboundLease      *transport.InboundLease
 	resumeBarrier     *resumeAuthorityBarrier
+	Revocations       []Revocation
+	ControlID         string
+	ErrorCondition    string
 }
 
 // resumeAuthorityBarrier is the production resume-continuity proof. The
@@ -131,7 +145,7 @@ type resumeAuthorityBarrier struct {
 
 func isControlEvent(kind EventKind) bool {
 	switch kind {
-	case EventHandled, EventCustodyAccepted, EventMailboxComplete, EventMembershipChanged, EventJingleFailure, EventResumeAuthorityResult:
+	case EventHandled, EventCustodyAccepted, EventMailboxComplete, EventMembershipChanged, EventJingleFailure, EventResumeAuthorityResult, EventPeerRevoked, EventRoutingFailure:
 		return true
 	default:
 		return false
@@ -243,6 +257,10 @@ type authorityIngressFenceSession interface {
 	setAuthorityIngressFence(func(uint64) bool)
 }
 
+type dynamicPeerAuthoritySession interface {
+	setDynamicPeerAuthority(bool)
+}
+
 type controlEventSession interface {
 	ReceiveControl(context.Context) (Event, error)
 }
@@ -265,6 +283,12 @@ type pendingSession interface {
 type preparedResumeSession interface {
 	PrepareResume(context.Context) (bool, error)
 	ReplayPrepared(context.Context, func(Stanza) bool, func(Stanza) (preparedReplayStanza, bool)) error
+}
+
+// preparedReplayPeersSession exposes only recipient metadata, never payload
+// bytes, so dynamic resume can refresh server authority before retransmission.
+type preparedReplayPeersSession interface {
+	PreparedReplayPeers(context.Context) ([]string, error)
 }
 
 type preparedReplayStanza struct {
@@ -310,8 +334,11 @@ const (
 )
 
 type Config struct {
-	Endpoint                       string
-	Auth                           Authentication
+	Endpoint string
+	Auth     Authentication
+	// DynamicPeerAuthority uses server-authorized peer IQs instead of a full
+	// membership snapshot. Production composition enables this explicitly.
+	DynamicPeerAuthority           bool
 	ReceiveCapacity                int
 	TransferWorkers                int
 	TransferQueue                  int
@@ -397,6 +424,7 @@ type Client struct {
 	closed                  bool
 	closeDone               chan struct{}
 	closeErr                error
+	terminalFailure         error
 	receiveWG               sync.WaitGroup
 	inboundBudget           *transport.InboundBudget
 	inbound                 chan AuthenticatedInbound
@@ -436,15 +464,18 @@ type Client struct {
 	// transaction across public Resume and the background reconnect owner.
 	// A channel token makes ownership acquisition context-cancellable; no Go
 	// mutex is held while a bounded dependency operation runs.
-	recoveryGate     chan struct{}
-	reconnectMu      sync.Mutex
-	reconnectDemand  chan reconnectRequest
-	replay           []Stanza
-	rank2NextOrdinal uint64
-	rank2Handled     uint64
-	deliveryWake     func()
-	externalQuery    *cancellableMutex
-	external         externalServiceCache
+	recoveryGate          chan struct{}
+	reconnectMu           sync.Mutex
+	reconnectDemand       chan reconnectRequest
+	replay                []Stanza
+	rank2NextOrdinal      uint64
+	rank2Handled          uint64
+	deliveryWake          func()
+	revocationHandler     func(context.Context, Revocation) error
+	routingFailureHandler func(string, string)
+	revocationJobs        chan revocationWork
+	externalQuery         *cancellableMutex
+	external              externalServiceCache
 }
 
 // ingressGeneration is one immutable authenticated session handoff. Exactly
@@ -606,7 +637,7 @@ func NewClient(config Config, dialer Dialer, pending *outbox.Outbox, receiver Tr
 		clear(config.Auth.Password)
 		return nil, ErrInvalidConfig
 	}
-	return &Client{config: config, dialer: dialer, outbox: pending, receiver: receiver, routes: routes, clock: config.Clock, stateChanged: make(chan struct{}), inbound: make(chan AuthenticatedInbound, config.ReceiveCapacity), signals: make(chan Stanza, config.ReceiveCapacity), inboundBudget: inboundBudget, authorityChanges: make(chan struct{}, 1), membershipReadySignal: make(chan struct{}), jobs: jobs, transferAdmission: newTransferAdmission(len(jobs)), complete: make(map[string]completionWaiter), jingle: make(map[string]*jingleWaiter), readiness: make(map[string]objectReadinessWaiter), readinessSeen: make(map[string]objectReadinessInbound), sendMu: newCancellableMutex(), ownershipMu: newCancellableMutex(), recoveryGate: recoveryGate, reconnectDemand: make(chan reconnectRequest, 1), rank2NextOrdinal: 1, externalQuery: newCancellableMutex()}, nil
+	return &Client{config: config, dialer: dialer, outbox: pending, receiver: receiver, routes: routes, clock: config.Clock, stateChanged: make(chan struct{}), inbound: make(chan AuthenticatedInbound, config.ReceiveCapacity), signals: make(chan Stanza, config.ReceiveCapacity), inboundBudget: inboundBudget, authorityChanges: make(chan struct{}, 1), membershipReadySignal: make(chan struct{}), jobs: jobs, revocationJobs: make(chan revocationWork, config.ReceiveCapacity), transferAdmission: newTransferAdmission(len(jobs)), complete: make(map[string]completionWaiter), jingle: make(map[string]*jingleWaiter), readiness: make(map[string]objectReadinessWaiter), readinessSeen: make(map[string]objectReadinessInbound), sendMu: newCancellableMutex(), ownershipMu: newCancellableMutex(), recoveryGate: recoveryGate, reconnectDemand: make(chan reconnectRequest, 1), rank2NextOrdinal: 1, externalQuery: newCancellableMutex()}, nil
 }
 
 // Clock returns the one monotonic-backed calibrated time source owned by this
@@ -693,6 +724,20 @@ func (c *Client) pauseMembershipLocked(pendingNonce string) bool {
 	return true
 }
 
+// activateDynamicAuthorityLocked opens only the authenticated transport.
+// It does not authorize any peer: every peer handshake still needs a fresh
+// server IQ and exact-session result.
+func (c *Client) activateDynamicAuthorityLocked() {
+	c.authoritySnapshot = AuthoritySnapshot{}
+	c.authorityPendingNonce = ""
+	c.authoritySuspended = false
+	c.membershipReady = true
+	if c.membershipReadySignal != nil {
+		close(c.membershipReadySignal)
+		c.membershipReadySignal = nil
+	}
+}
+
 func (c *Client) TimeCalibration() (transport.CalibrationSnapshot, bool) {
 	if c == nil || c.clock == nil {
 		return transport.CalibrationSnapshot{}, false
@@ -708,8 +753,9 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	if c.closed {
+		failure := c.closedFailureLocked()
 		c.mu.Unlock()
-		return ErrClosed
+		return failure
 	}
 	if c.started {
 		c.mu.Unlock()
@@ -748,7 +794,11 @@ func (c *Client) Start(ctx context.Context) error {
 	// The terminal page makes the exact server session routable, but local
 	// application delivery remains paused until the membership owner installs
 	// this complete vector and acknowledges its exact-session capability.
-	authoritySnapshot, syncErr := synchronizeAuthoritySession(attempt.ctx, attempt.session, c.config.Auth.MeshID, attempt.identity.BoundIdentity)
+	var authoritySnapshot AuthoritySnapshot
+	var syncErr error
+	if !c.config.DynamicPeerAuthority {
+		authoritySnapshot, syncErr = synchronizeAuthoritySession(attempt.ctx, attempt.session, c.config.Auth.MeshID, attempt.identity.BoundIdentity)
+	}
 	if syncErr != nil {
 		err = syncErr
 		// Classify against the still-live attempt context. Abort owns and
@@ -841,6 +891,9 @@ func (c *Client) Start(ctx context.Context) error {
 			c.authoritySnapshot = authoritySnapshot.clone()
 		}
 	}
+	if c.config.DynamicPeerAuthority {
+		c.activateDynamicAuthorityLocked()
+	}
 	c.bindAuthorityIngressLocked(attempt.session)
 	retiredExternal := c.clearExternalServicesLocked()
 	_ = c.setStateLocked(initialState)
@@ -851,9 +904,12 @@ func (c *Client) Start(ctx context.Context) error {
 			c.wg.Add(1)
 			go c.transferLoop(c.jobs[i])
 		}
-		c.wg.Add(4)
+		c.wg.Add(7)
 		go c.receiveLoop()
 		go c.controlLoop()
+		go c.revocationLoop()
+		go c.revocationLoop()
+		go c.keepaliveLoop()
 		go c.reconnectLoop()
 		go c.clockLoop()
 		if !c.config.CredentialUsableUntil.IsZero() && c.config.SessionExpiryMode == SessionExpiryDisconnect {
@@ -884,7 +940,7 @@ func (c *Client) finishStart(generation uint64, _ Session, _ Authenticated, _ []
 func (c *Client) connect(ctx context.Context, generation uint64) (*setupAttempt, error) {
 	credential, credentialErr := c.currentCredential(ctx)
 	if credentialErr != nil {
-		return nil, ErrAuthentication
+		return nil, credentialErr
 	}
 	defer clear(credential.Password)
 	setup, cancelSetup := credentialBoundOperation(ctx, c.config.ReconnectOperationTimeout, credential.UsableUntil)
@@ -894,6 +950,9 @@ func (c *Client) connect(ctx context.Context, generation uint64) (*setupAttempt,
 		result := normalize(err, setup, ErrUnavailable)
 		cancelSetup()
 		return nil, result
+	}
+	if dynamic, ok := session.(dynamicPeerAuthoritySession); ok {
+		dynamic.setDynamicPeerAuthority(c.config.DynamicPeerAuthority)
 	}
 	if bounded, ok := session.(inboundBudgetSession); ok {
 		if err = bounded.bindInboundBudget(c.inboundBudget); err != nil {
@@ -953,15 +1012,17 @@ func (c *Client) connect(ctx context.Context, generation uint64) (*setupAttempt,
 		clear(proof)
 		return fail(normalizeEstablishment(err, setup, establishmentStreamManagement))
 	}
-	discoveryTimeout := boundedSetupPhaseTimeout(authorityDiscoveryTimeout)
-	if discoveryTimeout > phaseTimeout {
-		discoveryTimeout = phaseTimeout
-	}
-	if err := runSetupPhase(setup, ctx, discoveryTimeout, attempt.candidate, func(operation context.Context) error {
-		return discoverAuthoritySession(session, operation)
-	}); err != nil {
-		clear(proof)
-		return fail(normalize(err, setup, ErrUnavailable))
+	if !c.config.DynamicPeerAuthority {
+		discoveryTimeout := boundedSetupPhaseTimeout(authorityDiscoveryTimeout)
+		if discoveryTimeout > phaseTimeout {
+			discoveryTimeout = phaseTimeout
+		}
+		if err := runSetupPhase(setup, ctx, discoveryTimeout, attempt.candidate, func(operation context.Context) error {
+			return discoverAuthoritySession(session, operation)
+		}); err != nil {
+			clear(proof)
+			return fail(normalize(err, setup, ErrUnavailable))
+		}
 	}
 	calibrationTimeout := boundedSetupPhaseTimeout(timeCalibrationTimeout)
 	if err := runSetupPhase(setup, ctx, calibrationTimeout, attempt.candidate, func(operation context.Context) error {
@@ -1151,7 +1212,11 @@ func (c *Client) sendOwned(ctx context.Context, envelope protocol.Envelope, queu
 		local, session, ingress = c.identity.BoundIdentity, c.session, c.ingress
 		ready := c.started && !c.closed && c.state == DurableLive && c.membershipReady
 		if !ready {
+			failure := c.terminalFailure
 			c.mu.Unlock()
+			if failure != nil {
+				return UnavailableNoHandoff, failure
+			}
 			return UnavailableNoHandoff, ErrUnavailable
 		}
 		if envelope.Sender != local || envelope.MeshID != c.config.Auth.MeshID {
@@ -1210,12 +1275,23 @@ func (c *Client) sendOwned(ctx context.Context, envelope protocol.Envelope, queu
 	ready := c.started && !c.closed && c.state == DurableLive && c.membershipReady
 	if queuedCommitted && (currentSession != session || currentIngress != ingress || currentLocal != local) {
 		// Recovery replaced the session while this caller waited for writer
-		// admission. The replacement recovery owner observed the outbox claim while
-		// holding sendMu and is responsible for replaying the exact ordinal.
+		// admission. In dynamic mode the claim may have raced the recovery
+		// owner's metadata snapshot. Return it to the general queue so the
+		// exact-peer revalidation drain cannot miss this accepted payload.
 		c.mu.Unlock()
+		if c.config.DynamicPeerAuthority {
+			_ = c.outbox.ReleaseRank2Owned(envelope.MessageID, ordinal)
+			c.mu.Lock()
+			wake := c.deliveryWake
+			c.mu.Unlock()
+			if wake != nil {
+				wake()
+			}
+		}
 		return AcceptedOwned, nil
 	}
 	if !ready {
+		failure := c.terminalFailure
 		c.mu.Unlock()
 		if queuedCommitted {
 			// ClaimRank2 already transferred durable ownership, but this exact
@@ -1223,7 +1299,13 @@ func (c *Client) sendOwned(ctx context.Context, envelope protocol.Envelope, queu
 			// appoint reconnect/replay as the future owner; returning AcceptedOwned
 			// without that transition would strand the ordinal outside normal drains.
 			_ = c.transitionIngressFailure(session, ingress, DurablePending, true)
+			if failure != nil {
+				return AcceptedOwned, failure
+			}
 			return AcceptedOwned, ErrUnavailable
+		}
+		if failure != nil {
+			return UnavailableNoHandoff, failure
 		}
 		return UnavailableNoHandoff, ErrUnavailable
 	}
@@ -1313,7 +1395,11 @@ func (c *Client) sendStanzaWithFailure(ctx context.Context, stanza Stanza, durab
 	c.mu.Lock()
 	session, ingress, ready := c.session, c.ingress, c.started && !c.closed && c.membershipReady
 	if !ready || session == nil {
+		failure := c.terminalFailure
 		c.mu.Unlock()
+		if failure != nil {
+			return failure
+		}
 		return ErrUnavailable
 	}
 	c.mu.Unlock()
@@ -1325,6 +1411,12 @@ func (c *Client) sendStanzaWithFailure(ctx context.Context, stanza Stanza, durab
 		}
 		c.mu.Unlock()
 	} else {
+		var staged *wireError
+		if errors.As(err, &staged) && staged.stage == wireNotStarted {
+			// Nothing reached the stream, so a cancelled peer handshake
+			// cannot take down the shared XMPP session.
+			return err
+		}
 		record := c.evidenceRecord("xmpp_send_failed", "client", "send_stanza", ingress)
 		record.Reconnect = durableStateLoss || ctx.Err() != nil
 		emitRank2Evidence(record, err)
@@ -1413,8 +1505,9 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 	}
 	c.mu.Lock()
 	if c.closed {
+		failure := c.closedFailureLocked()
 		c.mu.Unlock()
-		return AuthenticatedInbound{}, ErrClosed
+		return AuthenticatedInbound{}, failure
 	}
 	if !c.started || c.ctx == nil {
 		c.mu.Unlock()
@@ -1435,7 +1528,7 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 		if callerErr := ctx.Err(); callerErr != nil {
 			return AuthenticatedInbound{}, callerErr
 		}
-		return AuthenticatedInbound{}, ErrClosed
+		return AuthenticatedInbound{}, c.closedFailure()
 	}
 
 	for {
@@ -1448,7 +1541,7 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 			case <-ctx.Done():
 				return AuthenticatedInbound{}, ctx.Err()
 			case <-lifetime.Done():
-				return AuthenticatedInbound{}, ErrClosed
+				return AuthenticatedInbound{}, c.closedFailure()
 			}
 			continue
 		}
@@ -1460,7 +1553,7 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 			c.mu.Unlock()
 			if closed {
 				clearAuthenticatedInbound(&inbound)
-				return AuthenticatedInbound{}, ErrClosed
+				return AuthenticatedInbound{}, c.closedFailure()
 			}
 			if !active {
 				clearAuthenticatedInbound(&inbound)
@@ -1474,7 +1567,7 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 					c.mu.Unlock()
 					if closed {
 						clearAuthenticatedInbound(&inbound)
-						return AuthenticatedInbound{}, ErrClosed
+						return AuthenticatedInbound{}, c.closedFailure()
 					}
 					if stillReady {
 						break
@@ -1486,7 +1579,7 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 						return AuthenticatedInbound{}, ctx.Err()
 					case <-lifetime.Done():
 						clearAuthenticatedInbound(&inbound)
-						return AuthenticatedInbound{}, ErrClosed
+						return AuthenticatedInbound{}, c.closedFailure()
 					}
 				}
 			}
@@ -1501,7 +1594,7 @@ func (c *Client) receiveAuthenticated(ctx context.Context, waitForMembership boo
 			if err := ctx.Err(); err != nil {
 				return AuthenticatedInbound{}, err
 			}
-			return AuthenticatedInbound{}, ErrClosed
+			return AuthenticatedInbound{}, c.closedFailure()
 		}
 	}
 }
@@ -1517,12 +1610,13 @@ func (c *Client) ReceiveAuthorityChange(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	lifetime, generation, started, closed := c.ctx, c.generation, c.started, c.closed
+	closedFailure := c.closedFailureLocked()
 	if !closed && started && lifetime != nil {
 		c.receiveWG.Add(1)
 	}
 	c.mu.Unlock()
 	if closed {
-		return ErrClosed
+		return closedFailure
 	}
 	if !started || lifetime == nil {
 		return ErrUnavailable
@@ -1537,9 +1631,10 @@ func (c *Client) ReceiveAuthorityChange(ctx context.Context) error {
 		currentIngress := c.sessionEpoch
 		c.authorityPendingIngress = 0
 		c.authorityWakeQueued = false
+		closedFailure = c.closedFailureLocked()
 		c.mu.Unlock()
 		if closed {
-			return ErrClosed
+			return closedFailure
 		}
 		// A queued wake belongs to one exact ingress generation. Reconnect may
 		// replace that ingress before the monitor consumes the wake; this is
@@ -1555,7 +1650,7 @@ func (c *Client) ReceiveAuthorityChange(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-lifetime.Done():
-		return ErrClosed
+		return c.closedFailure()
 	}
 }
 
@@ -1886,6 +1981,21 @@ func (c *Client) requestReconnectOwned(owner stateTransitionOwner) {
 	c.enqueueReconnectOwned(owner)
 }
 
+// Queue a retry only for the exact pending publication observed while holding
+// the state lock. A concurrent public Resume cannot turn this into a fresh
+// reconnect request against a healthy session.
+func (c *Client) requestReconnectIfPending() {
+	if c == nil || c.reconnectDemand == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || !c.started || c.state != DurablePending {
+		return
+	}
+	c.enqueueReconnectOwned(c.stateTransitionOwnerLocked())
+}
+
 func (c *Client) enqueueReconnectOwned(owner stateTransitionOwner) {
 	c.reconnectMu.Lock()
 	defer c.reconnectMu.Unlock()
@@ -1910,11 +2020,71 @@ func (c *Client) reconnectLoop() {
 		case request := <-c.reconnectDemand:
 			if !c.reconnectOwned(request.owner) {
 				_ = c.transitionOwnedState(request.owner, DurablePending, false, false)
+				if c.config.ReconnectAttempts == 0 {
+					continue
+				}
+				// A credential-store read may recover after this attempt. Keep a
+				// bounded retry demand alive while the same client is pending;
+				// terminal server denial cancels c.ctx and stops this loop.
+				timer := time.NewTimer(max(c.config.ReconnectInitial, 100*time.Millisecond))
+				select {
+				case <-timer.C:
+					c.requestReconnectIfPending()
+				case <-c.ctx.Done():
+					timer.Stop()
+					return
+				}
 			}
 		case <-c.ctx.Done():
 			return
 		}
 	}
+}
+
+// terminateRejectedRelogin is reserved for an authenticated denial during a
+// fresh dynamic-mode bind. A failed XEP-0198 resume alone is not such proof:
+// the following clean login can still succeed. Close retires the old peer
+// authority fence, replay and outbox, and stops further recovery demand.
+func (c *Client) terminateRejectedRelogin(owner stateTransitionOwner) {
+	c.mu.Lock()
+	current := c.stateTransitionOwnerCurrentLocked(owner)
+	if current {
+		c.terminalFailure = ErrAuthentication
+	}
+	c.mu.Unlock()
+	if !current {
+		return
+	}
+	// Close owns component teardown, but its join includes this reconnect
+	// worker. An already-cancelled caller context lets it publish closure and
+	// launch cleanup without waiting for itself.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = c.Close(ctx)
+}
+
+func (c *Client) closedFailureLocked() error {
+	if c.terminalFailure != nil {
+		return c.terminalFailure
+	}
+	return ErrClosed
+}
+
+func (c *Client) closedFailure() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closedFailureLocked()
+}
+
+// TerminalFailure distinguishes a server-rejected re-login from a normal
+// application Close without exposing dependency-specific authentication data.
+func (c *Client) TerminalFailure() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.terminalFailure
 }
 
 func (c *Client) clockLoop() {
@@ -2022,6 +2192,18 @@ func (c *Client) handleIngressEvent(ingress *ingressGeneration, event Event, han
 		_ = c.setIngressStateOwned(owner, ingress, DurableLive)
 	case EventMembershipChanged:
 		c.handleIngressAuthorityChange(ingress)
+	case EventPeerRevoked:
+		c.enqueuePeerRevocation(ingress, event)
+	case EventRoutingFailure:
+		if !validReadinessTyped(event.MessageID, "msg_", 16) || !validJingleIQErrorCondition(event.ErrorCondition) {
+			return
+		}
+		c.mu.Lock()
+		handler := c.routingFailureHandler
+		c.mu.Unlock()
+		if handler != nil {
+			handler(event.MessageID, event.ErrorCondition)
+		}
 	case EventResumeAuthorityResult:
 		if event.resumeBarrier != nil {
 			close(event.resumeBarrier.done)
@@ -2337,13 +2519,21 @@ func (c *Client) reconnectWithOwner(required *stateTransitionOwner) bool {
 		if err != nil {
 			emitRank2Evidence(c.evidenceRecord("clean_bind_failed", "client", "connect", owner.ingress), err)
 			operationCancel()
+			if c.config.DynamicPeerAuthority &&
+				(errors.Is(err, ErrAuthentication) || errors.Is(err, ErrIdentityBinding) || errors.Is(err, ErrAuthorityRejected)) {
+				c.terminateRejectedRelogin(owner)
+				return false
+			}
 			continue
 		}
 		emitRank2Evidence(c.evidenceRecord("clean_bind_connected", "client", "authority_sync", owner.ingress), nil)
 		newSession, identity := attempt.session, attempt.identity
-		authoritySnapshot, err := synchronizeAuthoritySession(
-			attempt.ctx, newSession, c.config.Auth.MeshID, identity.BoundIdentity,
-		)
+		var authoritySnapshot AuthoritySnapshot
+		if !c.config.DynamicPeerAuthority {
+			authoritySnapshot, err = synchronizeAuthoritySession(
+				attempt.ctx, newSession, c.config.Auth.MeshID, identity.BoundIdentity,
+			)
+		}
 		if err != nil {
 			emitRank2Evidence(c.evidenceRecord("clean_bind_failed", "client", "authority_sync", owner.ingress), err)
 			_ = attempt.finish(false)
@@ -2425,11 +2615,15 @@ func (c *Client) reconnectWithOwner(required *stateTransitionOwner) bool {
 		mailbox = nil
 		clear(c.identity.Proof)
 		c.session, c.identity, c.ingress = newSession, identity, newIngress
-		authoritySnapshot.session = newSession
-		authoritySnapshot.sessionEpoch = newIngress.id
-		if c.pauseMembershipLocked(authoritySnapshot.nonce) {
-			authoritySnapshot.authorityGeneration = c.authorityGeneration
-			c.authoritySnapshot = authoritySnapshot.clone()
+		if c.config.DynamicPeerAuthority {
+			c.activateDynamicAuthorityLocked()
+		} else {
+			authoritySnapshot.session = newSession
+			authoritySnapshot.sessionEpoch = newIngress.id
+			if c.pauseMembershipLocked(authoritySnapshot.nonce) {
+				authoritySnapshot.authorityGeneration = c.authorityGeneration
+				c.authoritySnapshot = authoritySnapshot.clone()
+			}
 		}
 		c.bindAuthorityIngressLocked(newSession)
 		retiredExternal := c.clearExternalServicesLocked()
@@ -2443,9 +2637,31 @@ func (c *Client) reconnectWithOwner(required *stateTransitionOwner) bool {
 		// against the installed membership and only then writes them to this
 		// replacement session.
 		clearStanzas(c.replay)
-		c.replay = retained
+		if c.config.DynamicPeerAuthority {
+			// XEP-0198 resumption failed: no server custody proof exists for
+			// old exact-resource stanzas. This best-effort version neither
+			// reroutes nor retries them on a new session.
+			clearStanzas(retained)
+			retained = nil
+			c.replay = nil
+		} else {
+			c.replay = retained
+		}
 		retained = nil
 		c.mu.Unlock()
+		if c.config.DynamicPeerAuthority {
+			// A clean bind cannot prove custody of an attempt addressed to the
+			// retired exact resource. Keep its immutable payload in the general
+			// outbox so the mesh drain can reauthorize the same exact peer before
+			// retrying. Old-session custody evidence cannot resurrect a retired
+			// entry or release a claim with a newer transport ordinal.
+			for _, pending := range owned {
+				_ = c.outbox.ReleaseRank2Owned(pending.MessageID, pending.TransportOrdinal)
+			}
+			if c.deliveryWake != nil {
+				c.deliveryWake()
+			}
+		}
 		emitRank2Evidence(c.evidenceRecord("clean_bind_published", "client", "ready", newIngress), nil)
 		operationCancel()
 		retireExternalServiceExpiry(retiredExternal)
@@ -2567,9 +2783,16 @@ func (c *Client) currentCredential(ctx context.Context) (Credential, error) {
 	}
 	if c.config.CredentialSource != nil {
 		credential, err := c.config.CredentialSource(ctx)
-		if err != nil || len(credential.Password) == 0 || credential.UsableUntil.IsZero() || credential.UsableUntil.Location() != time.UTC || c.config.CredentialNow == nil || !c.config.CredentialNow().UTC().Before(credential.UsableUntil) {
+		if err != nil {
 			clear(credential.Password)
+			if errors.Is(err, ErrUnavailable) {
+				return Credential{}, ErrUnavailable
+			}
 			return Credential{}, ErrAuthentication
+		}
+		if len(credential.Password) == 0 || credential.UsableUntil.IsZero() || credential.UsableUntil.Location() != time.UTC || c.config.CredentialNow == nil || !c.config.CredentialNow().UTC().Before(credential.UsableUntil) {
+			clear(credential.Password)
+			return Credential{}, ErrUnavailable
 		}
 		return credential, nil
 	}
@@ -2634,9 +2857,19 @@ func (c *Client) completeCommittedResume(ctx context.Context, session Session, p
 		emitRank2Evidence(c.evidenceRecord("resume_stage_failed", "client", "authority_result", owner.ingress), err)
 		return err
 	}
-	if prepared != nil {
+	replay := func() error {
+		if prepared == nil {
+			return nil
+		}
 		if err := c.replayPrepared(ctx, session, prepared); err != nil {
 			emitRank2Evidence(c.evidenceRecord("resume_stage_failed", "client", "replay", owner.ingress), err)
+			return err
+		}
+		return nil
+	}
+	if !c.config.DynamicPeerAuthority {
+		// Legacy replay is still gated by the server's continuity marker.
+		if err := replay(); err != nil {
 			return err
 		}
 	}
@@ -2648,11 +2881,72 @@ func (c *Client) completeCommittedResume(ctx context.Context, session Session, p
 		emitRank2Evidence(c.evidenceRecord("resume_stage_failed", "client", "authority_restore", owner.ingress), err)
 		return err
 	}
+	if c.config.DynamicPeerAuthority {
+		c.mu.Lock()
+		if c.session != session || c.closed || c.generation != generation {
+			c.mu.Unlock()
+			return ErrUnavailable
+		}
+		c.activateDynamicAuthorityLocked()
+		c.mu.Unlock()
+		if prepared != nil {
+			if err := c.reauthorizePreparedReplay(ctx, session); err != nil {
+				emitRank2Evidence(c.evidenceRecord("resume_stage_failed", "client", "peer_reauthorization", owner.ingress), err)
+				return err
+			}
+			if err := replay(); err != nil {
+				return err
+			}
+		}
+	}
 	if err := c.recoveryGenerationError(generation); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// reauthorizePreparedReplay is a fresh server handshake for every exact peer
+// that could receive old-stream application data. No old peer cache or mesh
+// snapshot is trusted after resume. If any peer cannot be reauthorized, the
+// entire prepared replay fails closed and normal clean-bind recovery takes
+// over instead of emitting an application stanza to that peer.
+func (c *Client) reauthorizePreparedReplay(ctx context.Context, session Session) error {
+	peers := make(map[string]struct{})
+	for _, pending := range c.outbox.Rank2Metadata() {
+		peers[pending.Recipient] = struct{}{}
+	}
+	source, ok := session.(preparedReplayPeersSession)
+	if !ok {
+		return ErrUnavailable
+	}
+	prepared, err := source.PreparedReplayPeers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, peer := range prepared {
+		peers[peer] = struct{}{}
+	}
+	if len(peers) == 0 {
+		return nil
+	}
+	authorizer, ok := session.(peerExactAuthorizationSession)
+	if !ok {
+		return ErrUnavailable
+	}
+	for peer := range peers {
+		if !canonicalFullPeer(peer) {
+			return ErrProtocol
+		}
+		result, err := authorizer.ResolveAuthorizedExactPeer(ctx, peer)
+		if err != nil {
+			return err
+		}
+		if !validAuthorizedPeer(result, peer) {
+			return ErrProtocol
+		}
 	}
 	return nil
 }
@@ -3016,7 +3310,7 @@ func validEnvelopeReplayMetadata(stanza Stanza, meshID string) bool {
 }
 
 func isSessionControlStanza(kind StanzaKind) bool {
-	return kind == StanzaTimeCalibration || kind == StanzaAuthoritySync || kind == StanzaAuthorityDiscovery || kind == StanzaUploadSlotQuery || kind == StanzaExternalServiceQuery || kind == StanzaSessionPingResult
+	return kind == StanzaTimeCalibration || kind == StanzaAuthoritySync || kind == StanzaAuthorityDiscovery || kind == StanzaUploadSlotQuery || kind == StanzaExternalServiceQuery || kind == StanzaSessionPingResult || kind == StanzaPeerAuthorization || kind == StanzaPeerRevocationAck || kind == StanzaPeerRevocationPacketAck || kind == StanzaSessionPingQuery
 }
 
 func (c *Client) reconnectOperation() (context.Context, context.CancelFunc) {
@@ -3509,12 +3803,13 @@ func (c *Client) Close(ctx context.Context) error {
 		c.closeDone = make(chan struct{})
 		closeDone = c.closeDone
 		retiredExternal = c.setStateLocked(DurableUnknown)
+		closedFailure := c.closedFailureLocked()
 		cancel, startCancel, startDone, session, ingress = c.cancel, c.startCancel, c.startDone, c.session, c.ingress
 		clear(c.identity.Proof)
 		c.identity = Authenticated{}
 		for _, waiter := range c.complete {
 			select {
-			case waiter.result <- completion{err: ErrClosed}:
+			case waiter.result <- completion{err: closedFailure}:
 			default:
 			}
 		}
@@ -3525,12 +3820,12 @@ func (c *Client) Close(ctx context.Context) error {
 		c.replay = nil
 		for _, waiter := range c.jingle {
 			select {
-			case waiter.result <- jingleResult{err: ErrClosed}:
+			case waiter.result <- jingleResult{err: closedFailure}:
 			default:
 			}
 		}
 		c.jingle = make(map[string]*jingleWaiter)
-		c.retireObjectReadinessLocked(ErrClosed)
+		c.retireObjectReadinessLocked(closedFailure)
 		c.closeTransferAdmissionLocked()
 		closeClaimed = true
 		c.mu.state.Unlock()

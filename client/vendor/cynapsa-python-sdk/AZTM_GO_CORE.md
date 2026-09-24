@@ -20,7 +20,7 @@ header list, and exact body bytes. Optional application-error metadata is carrie
 a separate bounded field with code, safe detail, and JSON-object details; it
 never consumes or reserves an application header name.
 
-Current-membership and application-policy denials retain a dedicated closed
+Server-handshake membership and application-policy denials retain a dedicated closed
 failure category through Core composition and are projected as the local,
 non-retryable public `authorization_rejected` error at the `policy` stage.
 Other rejected commands retain the generic `command_error` projection.
@@ -38,14 +38,16 @@ Core attempts Rank 1 and, when required, Rank 2. The SDK holds no envelope copy
 and performs no independent retry.
 
 Inbound deduplication uses authenticated mesh, authenticated sender, and
-message ID. Integrity, identity, current membership, application-path policy,
-expiry, and capacity checks fail closed before SDK publication. Current
-membership comes from the server authority and has no membership lease.
+message ID. Integrity, identity, server-authorized peer state,
+application-path policy, expiry, and capacity checks fail closed before SDK
+publication. No complete mesh-member snapshot is downloaded. Unknown inbound
+exact senders require an authenticated server handshake before lane admission.
 
 Each active peer has bounded Core-owned work state under a shared count and
-byte budget. Removing either peer's exact resource revokes its authority,
-cancels affected work, and purges the server mailbox entries owned by that
-sender or recipient resource.
+byte budget. A logical revoke closes every installation of that agent; an
+installation revoke closes only the matching server-issued session incarnation.
+The dedicated server currently has no per-installation offline mailbox;
+unacknowledged stanzas can be lost after the XEP-0198 resume window expires.
 
 ## RPC and delivery
 
@@ -61,16 +63,15 @@ application signal. Future telemetry for that ambiguity is operator-private.
 ## Session lifecycle
 
 A fresh Rank 2 session completes TLS, SASL, exact-resource binding, XEP-0198,
-authority-feature discovery, server-time calibration, and a complete current
-membership snapshot before application traffic is released.
+and server-time calibration before local authority is published. Each peer
+requires a server-authorized Cynapsa handshake before first use.
 
-A successful resume performs TLS and SASL but does not bind again, rediscover
-features, or fetch another snapshot. After the authority barrier and retained
-transport replay complete, Core recalibrates server time, restores authority,
-and publishes the session as live. A failed resume performs the full fresh
-setup. A dedicated bounded control lane handles authority work; each exact
-correlated IQ is acknowledged as processed only after its effect is committed,
-otherwise the session closes.
+A successful resume preserves the server session; Core still closes old peer
+links on interruption and reauthorizes them before queued work resumes.
+A failed resume performs a fresh bind. The server's resumption window is
+30 seconds. Both sides probe idle connections every 10 seconds, allowing
+10 seconds for a reply. A dedicated bounded control lane action-ACKs a
+revoke only after all specified peer cleanup is complete.
 
 Shutdown closes admission first, joins Core-owned workers, resolves waiters
 once, clears secrets and retained bytes, and prevents post-close SDK delivery.

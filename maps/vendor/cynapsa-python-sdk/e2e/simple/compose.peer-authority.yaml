@@ -1,0 +1,131 @@
+services:
+  ejabberd:
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR:?set CYNAPSA_E2E_RUNTIME_DIR}/ejabberd-peer-authority.yml:/opt/ejabberd/conf/ejabberd.yml:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/runtime-jwks.json:/opt/ejabberd/conf/certs/runtime-jwks.json:ro
+  enrollment:
+    build:
+      context: ../..
+      dockerfile: e2e/simple/Dockerfile.enrollment
+    image: cynapsa-simple-e2e-enrollment:${CYNAPSA_E2E_IMAGE_TAG:-local}
+    network_mode: service:ejabberd-net
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/mock-enrollment.json:/fixture/mock-enrollment.json:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/runtime-signing.pem:/fixture/runtime-signing.pem:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/enrollment-cert.pem:/fixture/enrollment-cert.pem:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/enrollment-key.pem:/fixture/enrollment-key.pem:ro
+    depends_on:
+      ejabberd-net:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "python -c 'import ssl,urllib.request; urllib.request.urlopen(\"https://127.0.0.1/health\", context=ssl._create_unverified_context(), timeout=2).read() == b\"ok\"'"]
+      interval: 2s
+      timeout: 4s
+      retries: 20
+  native-server:
+    build:
+      args:
+        CYNAPSA_E2E_GO_BUILD_TAGS: cynapsa_test_evidence
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/hosts:/etc/hosts:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/native-server.token:/run/cynapsa/token:ro
+    environment:
+      CYNAPSA_E2E_TOKEN_FILE: /run/cynapsa/token
+      CYNAPSA_STATE_DIRECTORY: /tmp/cynapsa-state
+  monkey-server:
+    build:
+      args:
+        CYNAPSA_E2E_GO_BUILD_TAGS: cynapsa_test_evidence
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/hosts:/etc/hosts:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/monkey-server.token:/run/cynapsa/token:ro
+    environment:
+      CYNAPSA_STATE_DIRECTORY: /tmp/cynapsa-state
+    command:
+      - cynapsa
+      - run
+      - --mesh-id
+      - simple-e2e
+      - --token-file
+      - /run/cynapsa/token
+      - --allow
+      - "*"
+      - "*"
+      - --
+      - uvicorn
+      - cynapsa_e2e.monkey_fastapi_server:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8000"
+  native-sync-client:
+    build:
+      args:
+        CYNAPSA_E2E_GO_BUILD_TAGS: cynapsa_test_evidence
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/hosts:/etc/hosts:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/native-sync-client.token:/run/cynapsa/token:ro
+    environment:
+      E2E_HOP_CHECK: "1"
+      CYNAPSA_E2E_TOKEN_FILE: /run/cynapsa/token
+      CYNAPSA_STATE_DIRECTORY: /tmp/cynapsa-state
+  native-async-client:
+    build:
+      args:
+        CYNAPSA_E2E_GO_BUILD_TAGS: cynapsa_test_evidence
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/hosts:/etc/hosts:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/native-async-client.token:/run/cynapsa/token:ro
+    environment:
+      CYNAPSA_E2E_TOKEN_FILE: /run/cynapsa/token
+      CYNAPSA_STATE_DIRECTORY: /tmp/cynapsa-state
+  monkey-sync-client:
+    build:
+      args:
+        CYNAPSA_E2E_GO_BUILD_TAGS: cynapsa_test_evidence
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/hosts:/etc/hosts:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/monkey-sync-client.token:/run/cynapsa/token:ro
+    environment:
+      E2E_HOP_CHECK: "1"
+      CYNAPSA_STATE_DIRECTORY: /tmp/cynapsa-state
+    command:
+      - cynapsa
+      - run
+      - --mesh-id
+      - simple-e2e
+      - --token-file
+      - /run/cynapsa/token
+      - --command-timeout-ms
+      - "30000"
+      - --rpc-timeout-ms
+      - "30000"
+      - --map
+      - https://native-server.test
+      - native-server@mesh.test
+      - rpc
+      - --map
+      - https://monkey-server.test
+      - monkey-server@mesh.test
+      - rpc
+      - --allow
+      - "*"
+      - "*"
+      - --
+      - python
+      - -m
+      - cynapsa_e2e.monkey_sync_client
+  monkey-async-client:
+    build:
+      args:
+        CYNAPSA_E2E_GO_BUILD_TAGS: cynapsa_test_evidence
+    volumes:
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/hosts:/etc/hosts:ro
+      - ${CYNAPSA_E2E_RUNTIME_DIR}/monkey-async-client.token:/run/cynapsa/token:ro
+    environment:
+      CYNAPSA_E2E_TOKEN_FILE: /run/cynapsa/token
+      CYNAPSA_STATE_DIRECTORY: /tmp/cynapsa-state

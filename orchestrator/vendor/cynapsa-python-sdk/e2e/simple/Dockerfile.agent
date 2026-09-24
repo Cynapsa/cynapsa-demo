@@ -3,7 +3,8 @@
 FROM golang:1.26.6-bookworm AS core-build
 WORKDIR /core
 COPY --from=core . .
-RUN go build -trimpath -buildmode=c-shared \
+ARG CYNAPSA_E2E_GO_BUILD_TAGS=""
+RUN go build -tags "$CYNAPSA_E2E_GO_BUILD_TAGS" -trimpath -buildmode=c-shared \
     -ldflags="-extldflags=-Wl,--version-script,/core/cmd/cynapsacore-shared/exports_linux.map" \
     -o /out/libcynapsacore.so ./cmd/cynapsacore-shared
 

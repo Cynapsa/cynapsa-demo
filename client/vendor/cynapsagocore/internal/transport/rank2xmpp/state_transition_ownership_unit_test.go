@@ -297,6 +297,26 @@ func TestQueuedReconnectDemandCannotCrossNewerRecovery(t *testing.T) {
 	}
 }
 
+func TestPendingRetryCannotQueueHealthySessionOwner(t *testing.T) {
+	client := stateOwnershipTestClient(&fakeSession{events: make(chan Event)}, nil, nil)
+	client.state = DurablePending
+	client.stateEpoch = 1
+	client.requestReconnectIfPending()
+	queued := <-client.reconnectDemand
+	if queued.owner.stateEpoch != 1 {
+		t.Fatalf("queued owner epoch=%d", queued.owner.stateEpoch)
+	}
+	if err := client.setRecoveryStateOwned(queued.owner, client.generation, DurableLive); err != nil {
+		t.Fatal(err)
+	}
+	client.requestReconnectIfPending()
+	select {
+	case request := <-client.reconnectDemand:
+		t.Fatalf("healthy session received pending retry: %#v", request)
+	default:
+	}
+}
+
 func TestRecoveryFailureFencePanicStillPublishesPending(t *testing.T) {
 	client := stateOwnershipTestClient(&fakeSession{events: make(chan Event)}, nil, func() { panic("fence") })
 	owner, ok := client.captureStateTransitionOwner()

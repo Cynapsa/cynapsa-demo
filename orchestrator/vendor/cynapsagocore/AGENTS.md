@@ -25,3 +25,23 @@ Production completion also requires `docs/development/PRODUCTION_READINESS_NEXT_
 For that execution plan, Pod 6 is authorized to create and configure disposable local ejabberd containers for integration and E2E testing. Follow the isolation, image-pinning, test-credential, resource-limit, prohibited-mount, and unconditional-teardown rules in the master and Pod 6 documents. This does not authorize access to production or shared servers.
 
 Pod 7 has the similarly bounded authorization documented in the master and Pod 7 documents for disposable Coturn, fault-injection, SDK-build, and qualification containers. External publication remains prohibited without explicit user authorization.
+
+## CynapsaGuard implementation gate
+
+Guard work starts at [`docs/guard/00-agent-start-here.md`](docs/guard/00-agent-start-here.md). Read that file and the rest of `docs/guard/` in numeric order before changing Guard-related code or tests.
+
+`CynapsaGuardDesign` is the contract authority. Guard implementation is prohibited while [`contracts.lock.json`](contracts.lock.json) is `UNPINNED`, while its pinned Design publication is not an immutable `implementation_candidate`, or while `implementation_allowed` is not `true`. Before coding, verify the exact Design commit, external release-manifest SHA-256, and every consumed artifact SHA-256 from a remote readback. Machine-readable Design contracts take precedence over prose. A conflict, missing field, or ambiguous state is a Design defect, not permission to invent a local contract.
+
+The current V1 boundaries are non-negotiable:
+
+- Logical message version remains 2. A new strict private wire version 3 carries the unchanged logical-V2 material plus `ms1` and optional `ga1` proofs.
+- Current V2 deliberately omits and rejects reserved map key 12. Never repurpose `CredentialProof` or make V2 proof-bearing.
+- `ms1` is the Design-defined Ed25519 signature over the domain-separated logical digest. `ga1` is the Guard compact JWS that supplies the exact live-session, installation, policy, and authority binding for enforced traffic.
+- Guard-off enrollment, cached `e2` login, renewal, Rank 1, TURN, Rank 2, object delivery, and `continue`/`disconnect` behavior remain unchanged and make zero Guard/provider calls.
+- The deferred `SenderTransferProofV1`, independent `signed_required` policy, and `stable_resource` mailbox proposal are not V1 and must not be implemented.
+- One sender transfer creates one Guard transaction. A normal same-domain receiver makes zero Guard/provider calls. Ordinary send/receive does not make a per-message Management call.
+- Never hold global, profile, mesh, transport, peer, outbox, or delivery locks across Guard or other network I/O. Immediately before publication, run the final current-authority/session/policy fence defined by Design.
+
+Use the repository's pinned toolchain and existing commands. At minimum run applicable unit, race, integration, E2E, fault, Coturn, shared-library, doc-contract, and release checks described in [`docs/guard/08-testing-and-acceptance.md`](docs/guard/08-testing-and-acceptance.md). Do not claim production, live-provider, deployed, HA, or qualification success from local fixtures.
+
+Every Guard handoff must report the repository commit, pinned Design commit and checksums, completed requirement IDs, files changed, commands and exact results, evidence paths and digests, live dependencies exercised, limitations, security/compatibility notes, and rollback compatibility. If implementation discovers a contract change, stop affected work, update and publish Design first, then update this repository's lock before resuming.

@@ -5,15 +5,11 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SDK_ROOT=$(cd -- "$ROOT/../.." && pwd)
 DEFAULT_GO_CORE=$(cd -- "$SDK_ROOT/../cynapsa/cynapsagocore" 2>/dev/null && pwd || true)
 GO_CORE=${CYNAPSA_GO_CORE_PATH:-$DEFAULT_GO_CORE}
-TESTS=${CYNAPSA_TESTS_PATH:-}
-MANAGEMENT=${CYNAPSA_MANAGEMENT_PATH:-}
-ENROLLMENT=${CYNAPSA_ENROLLMENT_PATH:-}
-EJABBERD=${CYNAPSA_EJABBERD_PATH:-}
+EJABBERD=${CYNAPSA_EJABBERD_PATH:-$SDK_ROOT/../cynapsa/ejabberd-remove-snapshot}
 COMPOSE_FILE="$ROOT/compose.yaml"
 ARTIFACT_ROOT="$ROOT/artifacts"
 RUN_ID=$(date -u +%Y%m%dt%H%M%Sz)-$$
 RUNTIME="$ROOT/.runtime/$RUN_ID"
-AUTH_STATE="$RUNTIME/auth"
 ARTIFACTS="$ARTIFACT_ROOT/$RUN_ID"
 PROJECT="cynapsa-simple-e2e-$RUN_ID"
 IMAGE_TAG="$RUN_ID"
@@ -35,8 +31,6 @@ MONKEY_XMPP_OUT_DELTA=0
 MONKEY_XMPP_IN_DELTA=0
 MONKEY_NON_XMPP_DENIED=0
 BACKGROUND_PIDS=()
-MONKEY_ASYNC_INSTALLATION_ONLY=0
-RUNTIME_RESOURCE_CACHE="$RUNTIME/runtime-resources.tsv"
 
 die() {
   printf 'simple-e2e: %s\n' "$*" >&2
@@ -96,49 +90,7 @@ compose() {
 }
 
 ejabberdctl() {
-  compose exec -T ejabberd /opt/ejabberd/bin/ejabberdctl "$@"
-}
-
-agent_env_prefix() {
-  printf 'CYNAPSA_%s' "$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')"
-}
-
-agent_id_for() {
-  local variable
-  variable="$(agent_env_prefix "$1")_AGENT_ID"
-  [[ -n ${!variable:-} ]] || die "provisioned AgentID is missing for $1"
-  printf '%s\n' "${!variable}"
-}
-
-runtime_resource_for() {
-  local label=$1 bare sessions matches cached
-  if [[ -f "$RUNTIME_RESOURCE_CACHE" ]]; then
-    cached=$(awk -F '\t' -v label="$label" '$1 == label {value = $2} END {print value}' "$RUNTIME_RESOURCE_CACHE")
-    if [[ -n "$cached" ]]; then
-      printf '%s\n' "$cached"
-      return 0
-    fi
-  fi
-  bare=$(agent_id_for "$label")
-  sessions=$(ejabberdctl cynapsa_runtime_sessions "$CYNAPSA_MESH_ID" mesh.test)
-  matches=$(python3 -c 'import re,sys; bare=sys.argv[1]; print("\n".join(sorted(set(re.findall(re.escape(bare) + r"/r2\.[A-Za-z0-9._-]+", sys.stdin.read())))))' "$bare" <<<"$sessions")
-  [[ $(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d '[:space:]') == 1 ]] || \
-    die "runtime-v2 authority did not report exactly one ready resource for $label"
-  printf '%s\n' "$matches"
-}
-
-remember_runtime_resource() {
-  local label=$1 resource temporary
-  resource=$(runtime_resource_for "$label")
-  temporary="$RUNTIME_RESOURCE_CACHE.tmp"
-  if [[ -f "$RUNTIME_RESOURCE_CACHE" ]]; then
-    awk -F '\t' -v label="$label" '$1 != label' "$RUNTIME_RESOURCE_CACHE" >"$temporary"
-  else
-    : >"$temporary"
-  fi
-  printf '%s\t%s\n' "$label" "$resource" >>"$temporary"
-  chmod 0600 "$temporary"
-  mv "$temporary" "$RUNTIME_RESOURCE_CACHE"
+  compose exec -T ejabberd ejabberdctl "$@"
 }
 
 client_sidecars() {
@@ -162,18 +114,15 @@ sanitize_file() {
   if [[ ! -f "$source" ]]; then
     return 0
   fi
-  python3 - "$RUNTIME/credentials.env" "$AUTH_STATE" "$source" "$target" <<'PY'
+  python3 - "$RUNTIME/credentials.env" "$source" "$target" <<'PY'
 from __future__ import annotations
 
-import json
-import re
 import sys
 from pathlib import Path
 
 env_path = Path(sys.argv[1])
-auth_state = Path(sys.argv[2])
-source = Path(sys.argv[3])
-target = Path(sys.argv[4])
+source = Path(sys.argv[2])
+target = Path(sys.argv[3])
 secrets: list[str] = []
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -183,7 +132,7 @@ if env_path.exists():
         if value and (key.endswith("_PASSWORD") or key in {"CYNAPSA_TURN_STATIC_AUTH_SECRET"}):
             secrets.append(value)
 for candidate in ("coturn-turn.conf", "ejabberd.yml"):
-    path = auth_state / ("config/ejabberd.yml" if candidate == "ejabberd.yml" else candidate)
+    path = env_path.parent / candidate
     if path.exists():
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("static-auth-secret="):
@@ -194,28 +143,11 @@ for candidate in ("coturn-turn.conf", "ejabberd.yml"):
                 _, value = line.split(":", 1)
                 if value:
                     secrets.append(value.strip().strip('"'))
-for root in (auth_state / "secrets", auth_state / "agents"):
-    if root.is_dir():
-        for path in root.rglob("*"):
-            if path.is_file() and path.stat().st_size <= 65536:
-                value = path.read_text(encoding="utf-8", errors="ignore").strip()
-                if value:
-                    secrets.append(value)
 secrets = sorted(set(secrets), key=len, reverse=True)
 text = source.read_text(encoding="utf-8", errors="replace")
 for secret in secrets:
     if secret:
         text = text.replace(secret, "[REDACTED]")
-expected_path = auth_state / "sdk-e2e-expected.json"
-if expected_path.is_file():
-    expected = json.loads(expected_path.read_text(encoding="utf-8"))
-    for agent in expected.get("agents", []):
-        label, agent_id = agent.get("label"), agent.get("agent_id")
-        if isinstance(label, str) and isinstance(agent_id, str):
-            text = text.replace(agent_id, f"[AGENT:{label}]")
-text = re.sub(r"cpsa_e1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]+", "[REDACTED_ENROLLMENT_TOKEN]", text)
-text = re.sub(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED_JWT]", text)
-text = re.sub(r"/r2\.[A-Za-z0-9._-]+", "/[RUNTIME_RESOURCE]", text)
 target.write_text(text, encoding="utf-8")
 PY
 }
@@ -227,17 +159,14 @@ capture_artifact() {
 }
 
 assert_artifacts_sanitized() {
-  python3 - "$RUNTIME/credentials.env" "$AUTH_STATE" "$ARTIFACTS" <<'PY'
+  python3 - "$RUNTIME/credentials.env" "$ARTIFACTS" <<'PY'
 from __future__ import annotations
 
-import json
-import re
 import sys
 from pathlib import Path
 
 env_path = Path(sys.argv[1])
-auth_state = Path(sys.argv[2])
-artifact_root = Path(sys.argv[3])
+artifact_root = Path(sys.argv[2])
 secrets: list[bytes] = []
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -246,20 +175,6 @@ if env_path.exists():
         key, value = line.split("=", 1)
         if value and (key.endswith("_PASSWORD") or key == "CYNAPSA_TURN_STATIC_AUTH_SECRET"):
             secrets.append(value.encode())
-for root in (auth_state / "secrets", auth_state / "agents"):
-    if root.is_dir():
-        for path in root.rglob("*"):
-            if path.is_file() and path.stat().st_size <= 65536:
-                value = path.read_bytes().strip()
-                if value:
-                    secrets.append(value)
-expected_path = auth_state / "sdk-e2e-expected.json"
-if expected_path.is_file():
-    expected = json.loads(expected_path.read_text(encoding="utf-8"))
-    for agent in expected.get("agents", []):
-        agent_id = agent.get("agent_id")
-        if isinstance(agent_id, str) and agent_id:
-            secrets.append(agent_id.encode())
 for path in artifact_root.rglob("*"):
     if not path.is_file():
         continue
@@ -267,13 +182,6 @@ for path in artifact_root.rglob("*"):
     for secret in secrets:
         if secret in data:
             raise SystemExit(f"runtime secret leaked into artifact: {path}")
-    text = data.decode("utf-8", errors="ignore")
-    if re.search(r"cpsa_e1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]+", text):
-        raise SystemExit(f"enrollment token leaked into artifact: {path}")
-    if re.search(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", text):
-        raise SystemExit(f"JWT leaked into artifact: {path}")
-    if re.search(r"/r2\.[A-Za-z0-9._-]+", text):
-        raise SystemExit(f"runtime resource leaked into artifact: {path}")
 PY
 }
 
@@ -281,7 +189,7 @@ capture() {
   mkdir -p "$ARTIFACTS"
   if [[ -n "$(compose ps -q ejabberd 2>/dev/null || true)" ]]; then
     printf '%s\n' 'P = gen_mod:get_module_proc(<<"mesh.test">>, mod_cynapsa_mesh), S = sys:get_state(P), Ready = lists:sort([{U,M} || {_Pid,{_SID,U,M}} <- maps:to_list(element(3,S))]), Pending = map_size(element(5,S)), Terminal = map_size(element(8,S)), Rows = lists:append([mnesia:dirty_read(cynapsa_mesh_mailbox,K) || K <- mnesia:dirty_all_keys(cynapsa_mesh_mailbox)]), Owners = lists:sort([{element(3,R),element(4,R)} || R <- Rows]), io:format("ready=~p~npending_sync=~B~nterminal_sync=~B~nmailbox=~p~n", [Ready,Pending,Terminal,Owners]), ok.' |
-      compose exec -T ejabberd /opt/ejabberd-26.04/erts-16.3.1/bin/erl_call \
+      compose exec -T ejabberd su-exec ejabberd /opt/ejabberd-26.04/erts-16.3.1/bin/erl_call \
         -e -n ejabberd@localhost -fetch_stdout -no_result_term \
         >"$RUNTIME/ejabberd-mesh-state.txt.raw" 2>&1 || true
     capture_artifact "$RUNTIME/ejabberd-mesh-state.txt.raw" ejabberd-mesh-state.txt
@@ -295,7 +203,7 @@ capture() {
   if compose ps --all --format json >"$RUNTIME/compose-ps.jsonl.raw" 2>&1; then
     capture_artifact "$RUNTIME/compose-ps.jsonl.raw" compose-ps.jsonl
   fi
-  local services=(router ejabberd-net stun-net turn-net postgres-net auth0-net management-net enrollment-net controller-net native-server-net monkey-server-net)
+  local services=(router ejabberd-net stun-net turn-net native-server-net monkey-server-net)
   local client service
   while IFS= read -r service; do
     services+=("$service")
@@ -313,7 +221,7 @@ capture() {
       capture_artifact "$RUNTIME/$client.log" "$client.log"
     fi
   done
-  for service in native-server monkey-server ejabberd stun turn postgres auth0 management enrollment controller; do
+  for service in native-server monkey-server ejabberd stun turn; do
     if [[ -f "$RUNTIME/$service.log" ]]; then
       capture_artifact "$RUNTIME/$service.log" "$service.log"
     elif [[ -n "$(compose ps -q "$service" 2>/dev/null || true)" ]]; then
@@ -321,7 +229,7 @@ capture() {
       capture_artifact "$RUNTIME/$service.log.raw" "$service.log"
     fi
   done
-  for file in summary.json timeline.log deep-evidence.txt auth-contract.json auth-identity-hashes.json core-provenance.json ejabberd-full-sessions.txt mesh-snapshot.txt authority-trace.txt monkey-async-pre-enrollment.log native-async-router-counters.txt native-async-turn-delta.log native-async-network-delay.txt native-async-turn-warmup-before.txt native-async-turn-warmup-after.txt native-async-turn-warmup-evidence.txt monkey-async-router-counters.txt native-server-response-qdisc.txt native-server-recovery-response-qdisc.txt native-server-fault-counters.txt native-server-fault-socket-state.txt native-server-fault-response-qdisc.txt monkey-async-client-fault-counters.txt monkey-async-client-fault-socket-state.txt monkey-async-client-fault-response-qdisc.txt monkey-async-rank2-evidence.txt short-resume-monkey-server-evidence.txt short-resume-monkey-server-counters.txt short-resume-monkey-sync-client-evidence.txt short-resume-monkey-sync-client-counters.txt monkey-server-short-resume-delay.txt; do
+  for file in summary.json timeline.log deep-evidence.txt core-provenance.json ejabberd-full-sessions.txt authority-trace.txt native-async-router-counters.txt native-async-turn-delta.log native-async-network-delay.txt native-async-turn-warmup-before.txt native-async-turn-warmup-after.txt native-async-turn-warmup-evidence.txt monkey-async-router-counters.txt native-server-response-qdisc.txt native-server-recovery-response-qdisc.txt native-server-fault-counters.txt native-server-fault-socket-state.txt native-server-fault-response-qdisc.txt monkey-async-client-fault-counters.txt monkey-async-client-fault-socket-state.txt monkey-async-client-fault-response-qdisc.txt monkey-async-rank2-evidence.txt short-resume-monkey-server-evidence.txt short-resume-monkey-server-counters.txt short-resume-monkey-sync-client-evidence.txt short-resume-monkey-sync-client-counters.txt monkey-server-short-resume-delay.txt; do
     if [[ -f "$RUNTIME/$file" ]]; then
       capture_artifact "$RUNTIME/$file" "$file"
     fi
@@ -340,11 +248,8 @@ cleanup() {
     wait "$pid" >/dev/null 2>&1 || true
   done
   capture
-  if ! assert_artifacts_sanitized; then
-    printf 'simple-e2e: retained-artifact sanitization failed\n' >&2
-    status=1
-  fi
-  compose down --volumes --remove-orphans --rmi local --timeout 10 >/dev/null 2>&1 || true
+  assert_artifacts_sanitized
+  compose down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true
   local container network
   for container in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT"); do
     docker rm -f "$container" >/dev/null 2>&1 || true
@@ -384,29 +289,6 @@ wait_healthy() {
   done
   compose logs --no-color "$service" >&2 || true
   die "$service readiness timed out"
-}
-
-wait_completed() {
-  local service=$1
-  local deadline=$((SECONDS + 180))
-  while (( SECONDS < deadline )); do
-    local container state code
-    container=$(compose --profile provision ps -q --all "$service" 2>/dev/null || true)
-    if [[ -n "$container" ]]; then
-      state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)
-      if [[ "$state" == exited ]]; then
-        code=$(docker inspect --format '{{.State.ExitCode}}' "$container")
-        if [[ "$code" == 0 ]]; then
-          return 0
-        fi
-        compose --profile provision logs --no-color "$service" >&2 || true
-        die "$service exited with status $code"
-      fi
-    fi
-    sleep 2
-  done
-  compose --profile provision logs --no-color "$service" >&2 || true
-  die "$service completion timed out"
 }
 
 router_sh() {
@@ -470,54 +352,45 @@ capture_router_counters() {
 }
 
 ejabberd_session_count() {
-  local user=$1 bare
-  bare=$(agent_id_for "$user")
+  local user=$1
   { compose logs --no-color ejabberd 2>/dev/null |
-    grep -F "Opened c2s session for $bare/" || true; } |
+    grep -F "Opened c2s session for $user@mesh.test/simple-e2e" || true; } |
     wc -l |
     tr -d '[:space:]'
 }
 
 ejabberd_auth_count() {
-  local user=$1 bare
-  bare=$(agent_id_for "$user")
-  { compose logs --no-color ejabberd 2>/dev/null |
-      grep -F "Accepted c2s " | grep -F " authentication for $bare" || true; } |
-    wc -l | tr -d '[:space:]'
+  local user=$1
+  ejabberd_log_count "Accepted c2s SCRAM-SHA-256-PLUS authentication for $user@mesh.test"
 }
 
 ejabberd_resume_pending_count() {
-  local user=$1 bare
-  bare=$(agent_id_for "$user")
+  local user=$1
   { compose logs --no-color ejabberd 2>/dev/null |
-      grep -F "Closing c2s connection for $bare/" |
+      grep -F "Closing c2s connection for $user@mesh.test/simple-e2e:" |
       grep -E "waiting [0-9]+ seconds for stream resumption" || true; } |
     wc -l |
     tr -d '[:space:]'
 }
 
 ejabberd_resume_count() {
-  local user=$1 bare
-  bare=$(agent_id_for "$user")
-  ejabberd_log_count "Resumed session for $bare/"
+  local user=$1
+  ejabberd_log_count "Resumed session for $user@mesh.test/simple-e2e"
 }
 
 ejabberd_resume_expiry_count() {
-  local user=$1 bare
-  bare=$(agent_id_for "$user")
-  { compose logs --no-color ejabberd 2>/dev/null |
-      grep -F "Closing c2s session for $bare/" |
-      grep -F "Timed out waiting for stream resumption" || true; } |
-    wc -l | tr -d '[:space:]'
+  local user=$1
+  ejabberd_log_count \
+    "Closing c2s session for $user@mesh.test/simple-e2e: Stream closed by local host: Timed out waiting for stream resumption"
 }
 
 # Passive VM call tracing gives the harness deterministic protocol counters
 # without adding a test command to either the agents or the production module.
 start_authority_trace() {
-  compose exec -T ejabberd \
+  compose exec -T ejabberd su-exec ejabberd \
     /opt/ejabberd-26.04/erts-16.3.1/bin/erl_call \
     -e -n ejabberd@localhost -fetch_stdout -no_result_term \
-    <"$ROOT/authority-trace-start.eval" 2>/dev/null |
+    <"$EJABBERD/test/sdk-e2e/authority-trace-start.eval" 2>/dev/null |
     grep -Fxq ready || die "could not start ejabberd authority trace"
 }
 
@@ -525,7 +398,7 @@ authority_trace_count() {
   local key=$1
   local value
   value=$(printf '%s\n' "case ets:lookup(cynapsa_e2e_authority_trace_counts, $key) of [{_, N}] -> io:format(\"~B~n\", [N]); _ -> io:format(\"missing~n\") end, ok." |
-    compose exec -T ejabberd \
+    compose exec -T ejabberd su-exec ejabberd \
       /opt/ejabberd-26.04/erts-16.3.1/bin/erl_call \
       -e -n ejabberd@localhost -fetch_stdout -no_result_term 2>/dev/null |
     tail -1)
@@ -536,14 +409,14 @@ authority_trace_count() {
 capture_authority_trace() {
   local key
   : >"$RUNTIME/authority-trace.txt"
-  for key in authority_snapshot resume_context_copy; do
+  for key in authority_discovery authority_snapshot resume_hook resume_authority_ready resume_authority_not_ready; do
     printf '%s=%s\n' "$key" "$(authority_trace_count "$key")" >>"$RUNTIME/authority-trace.txt"
   done
 }
 
 authority_trace_available() {
   printf '%s\n' 'io:format("~p~n", [is_pid(whereis(cynapsa_e2e_authority_trace)) andalso ets:info(cynapsa_e2e_authority_trace_counts) =/= undefined]), ok.' |
-    compose exec -T ejabberd \
+    compose exec -T ejabberd su-exec ejabberd \
       /opt/ejabberd-26.04/erts-16.3.1/bin/erl_call \
       -e -n ejabberd@localhost -fetch_stdout -no_result_term 2>/dev/null |
     grep -Fxq true
@@ -562,10 +435,11 @@ wait_for_resource_ready() {
 }
 
 ejabberd_resource_ready() {
-  local user=$1 bare sessions
-  bare=$(agent_id_for "$user")
-  sessions=$(ejabberdctl cynapsa_runtime_sessions "$CYNAPSA_MESH_ID" mesh.test 2>/dev/null || true)
-  [[ "$sessions" == *"$bare/r2."* ]]
+  local user=$1
+  printf '%s\n' "P = gen_mod:get_module_proc(<<\"mesh.test\">>, mod_cynapsa_mesh), S = sys:get_state(P), Ready = element(3,S), Found = lists:any(fun({_Pid,{_SID,U,M}}) -> U =:= <<\"$user\">> andalso M =:= <<\"simple-e2e\">> end, maps:to_list(Ready)), io:format(\"~p~n\", [Found]), ok." |
+    compose exec -T ejabberd su-exec ejabberd /opt/ejabberd-26.04/erts-16.3.1/bin/erl_call \
+      -e -n ejabberd@localhost -fetch_stdout -no_result_term 2>/dev/null |
+    grep -Fxq true
 }
 
 wait_for_resource_quiescent() {
@@ -971,13 +845,9 @@ service_dispatch_count() {
 mesh_mailbox_admission_count() {
   local sender=$1
   local recipient=$2
-  local sender_id recipient_id
-  sender_id=$(agent_id_for "$sender")
-  recipient_id=$(agent_id_for "$recipient")
   { compose logs --no-color ejabberd 2>/dev/null |
       grep -F 'cynapsa_mailbox admission ' |
-      grep -F "sender=$sender_id/" |
-      grep -F "recipient=$recipient_id/" || true; } |
+      grep -F "sender=$sender@mesh.test/simple-e2e recipient=$recipient@mesh.test/simple-e2e" || true; } |
     wc -l |
     tr -d '[:space:]'
 }
@@ -1254,11 +1124,7 @@ establish_native_async_turn_rpc() {
 
 run_client_plain() {
   local client=$1
-  local options=(--profile clients run --rm --no-deps)
-  if [[ $client == monkey-async-client && $MONKEY_ASYNC_INSTALLATION_ONLY -eq 1 ]]; then
-    options+=(-e CYNAPSA_ENROLLMENT_TOKEN_FILE=)
-  fi
-  compose "${options[@]}" "$client" >"$RUNTIME/$client.log" 2>&1
+  compose --profile clients run --rm --no-deps "$client" >"$RUNTIME/$client.log" 2>&1
 }
 
 run_client_with_short_resume() {
@@ -1268,9 +1134,9 @@ run_client_with_short_resume() {
   local label=$4
   local user=$5
   local before_sessions before_auth before_pending before_resumed before_expired
-  local before_snapshot before_context_copy
+  local before_discovery before_snapshot before_resume_hook before_ready before_not_ready
   local after_sessions after_auth after_pending after_resumed after_expired
-  local after_snapshot after_context_copy
+  local after_discovery after_snapshot after_resume_hook after_ready after_not_ready
   local dispatch_before dispatch_after request_message request_baseline client_pid
   local initial_session_delta initial_auth_delta recovery_auth_delta
 
@@ -1294,13 +1160,12 @@ run_client_with_short_resume() {
     ejabberd_resource_ready "$user" || die "$label faulted server was not authority-ready"
   fi
   wait_for_resource_ready "$user"
-  # Authority trace counters are global. The active client has only just
-  # started, so wait for its initial bound resource before taking the campaign
-  # baseline as well. This is redundant
+  # Authority trace counters are global.  The active client has only just
+  # started, so wait for its initial bound resource to cross the authority
+  # barrier before taking the campaign baseline as well.  This is redundant
   # when the client itself is the fault target, and intentionally does not
   # change the fault target's initial-session accounting above.
   wait_for_resource_ready "$client"
-  remember_runtime_resource "$client"
 
   # Baseline authority and stream lifecycle before the target request starts.
   # Both clients first execute ten 500-millisecond-delayed native-server RPCs, which
@@ -1309,8 +1174,11 @@ run_client_with_short_resume() {
   before_pending=$(ejabberd_resume_pending_count "$user")
   before_resumed=$(ejabberd_resume_count "$user")
   before_expired=$(ejabberd_resume_expiry_count "$user")
+  before_discovery=$(authority_trace_count authority_discovery)
   before_snapshot=$(authority_trace_count authority_snapshot)
-  before_context_copy=$(authority_trace_count resume_context_copy)
+  before_resume_hook=$(authority_trace_count resume_hook)
+  before_ready=$(authority_trace_count resume_authority_ready)
+  before_not_ready=$(authority_trace_count resume_authority_not_ready)
   request_baseline=$(request_event_count "$RUNTIME/$client.log" "$target" request-start)
   dispatch_before=$(service_dispatch_count "$target")
   request_message=$(wait_for_request_after "$RUNTIME/$client.log" "$target" request-start "$request_baseline") ||
@@ -1335,9 +1203,9 @@ run_client_with_short_resume() {
   restore_service_network "$fault_service" "$label"
   after_resumed=$(wait_for_count_above "$user successful XEP-0198 resume" \
     "$before_resumed" ejabberd_resume_count "$user")
-  after_context_copy=$(wait_for_count_above "$user verified resume-context copy" \
-    "$before_context_copy" authority_trace_count resume_context_copy)
-  timeline "$label resumed count=$after_resumed context_copy=$after_context_copy"
+  after_ready=$(wait_for_count_above "$user ready resume-authority result" \
+    "$before_ready" authority_trace_count resume_authority_ready)
+  timeline "$label resumed count=$after_resumed authority_ready=$after_ready"
 
   if ! wait "$client_pid"; then
     BACKGROUND_PIDS=()
@@ -1350,7 +1218,10 @@ run_client_with_short_resume() {
   after_sessions=$(ejabberd_session_count "$user")
   after_auth=$(ejabberd_auth_count "$user")
   after_expired=$(ejabberd_resume_expiry_count "$user")
+  after_discovery=$(authority_trace_count authority_discovery)
   after_snapshot=$(authority_trace_count authority_snapshot)
+  after_resume_hook=$(authority_trace_count resume_hook)
+  after_not_ready=$(authority_trace_count resume_authority_not_ready)
   [[ $after_sessions -eq $((before_sessions + initial_session_delta)) ]] ||
     die "$label opened an unexpected replacement full session"
   recovery_auth_delta=$((after_auth - before_auth - initial_auth_delta))
@@ -1358,30 +1229,39 @@ run_client_with_short_resume() {
     die "$label did not perform exactly one pre-resume SASL reconnect"
   [[ $after_expired -eq $before_expired ]] ||
     die "$label expired the resumable stream"
+  [[ $after_discovery -eq $before_discovery ]] ||
+    die "$label performed fresh authority discovery after successful resume"
   [[ $after_snapshot -eq $before_snapshot ]] ||
     die "$label requested a fresh authority snapshot after successful resume"
+  [[ $after_not_ready -eq $before_not_ready ]] ||
+    die "$label received a not-ready resume-authority result"
   [[ $after_resumed -eq $((before_resumed + 1)) ]] ||
     die "$label produced more than one XEP-0198 resume"
-  [[ $after_context_copy -eq $((before_context_copy + 1)) ]] ||
-    die "$label did not copy exactly one verified runtime context"
+  [[ $after_resume_hook -eq $((before_resume_hook + 1)) ]] ||
+    die "$label did not execute exactly one authority resume hook"
+  [[ $after_ready -eq $((before_ready + 1)) ]] ||
+    die "$label did not cross exactly one ready resume-authority barrier"
   wait_for_exact_request_pass "$RUNTIME/$client.log" "$target" "$request_message" ||
     die "$label original in-flight RPC did not complete"
 
   {
     printf 'client=%s\n' "${client%-client}"
-    printf 'faulted_resource=%s\n' "$(runtime_resource_for "$user")"
+    printf 'faulted_resource=%s@mesh.test/simple-e2e\n' "$user"
     printf 'faulted_role=%s\n' "${label#short-resume-}"
     printf 'target=%s\n' "$target"
     printf 'in_flight_message=%s\n' "$request_message"
     printf 'original_workload_passed_exactly_once=1\n'
     printf 'replacement_bound_session_delta=0\n'
-    printf 'pre_resume_runtime_jwt_reconnect_delta=%s\n' "$recovery_auth_delta"
+    printf 'pre_resume_scram_reconnect_delta=%s\n' "$recovery_auth_delta"
     printf 'resume_pending_delta=%s\n' "$((after_pending - before_pending))"
     printf 'successful_resume_delta=%s\n' "$((after_resumed - before_resumed))"
-    printf 'resume_context_copy_delta=%s\n' "$((after_context_copy - before_context_copy))"
+    printf 'authority_resume_hook_delta=%s\n' "$((after_resume_hook - before_resume_hook))"
     printf 'resume_expiry_delta=%s\n' "$((after_expired - before_expired))"
+    printf 'authority_discovery_delta=%s\n' "$((after_discovery - before_discovery))"
     printf 'authority_snapshot_delta=%s\n' "$((after_snapshot - before_snapshot))"
-    printf 'core_resume_gate=verified-context-copy-observed-before-workload-completion\n'
+    printf 'resume_authority_ready_delta=%s\n' "$((after_ready - before_ready))"
+    printf 'resume_authority_not_ready_delta=%s\n' "$((after_not_ready - before_not_ready))"
+    printf 'core_resume_barrier=ready-result-observed-before-workload-completion\n'
   } >"$RUNTIME/$label-evidence.txt"
 }
 
@@ -1438,8 +1318,6 @@ run_client_with_fault() {
   else
     connected=$before
   fi
-  wait_for_resource_ready "$client"
-  remember_runtime_resource "$client"
   start_baseline=0
   request_message=$(wait_for_request_after "$RUNTIME/$client.log" "$target" request-start "$start_baseline") || {
     restore_service_network "$fault_service" "$fault_label"
@@ -1508,7 +1386,8 @@ run_client_with_fault() {
   # and the potentially long TURN warm-up. Sampling after blackhole_service
   # would leave a gap for its bounded rejection pings in which the campaign's
   # XEP-0198 expiry could occur before the baseline is recorded.
-  expired_before=$(ejabberd_resume_expiry_count "$user")
+  expired_before=$(ejabberd_log_count \
+    "Closing c2s session for $user@mesh.test/simple-e2e: Stream closed by local host: Timed out waiting for stream resumption")
   timeline "$client $user XEP-0198 expiry baseline count=$expired_before"
   blackhole_service "$fault_service" "$fault_label"
   # Router-level fault rules catch the response already waiting in the fixed
@@ -1521,7 +1400,8 @@ run_client_with_fault() {
   expired_after=$(wait_for_count_above \
     "$user XEP-0198 resume-window expiry" \
     "$expired_before" \
-    ejabberd_resume_expiry_count "$user")
+    ejabberd_log_count \
+    "Closing c2s session for $user@mesh.test/simple-e2e: Stream closed by local host: Timed out waiting for stream resumption")
   timeline "$client $user stale XEP-0198 session expired count=$expired_after"
   record_fault_socket_state "$fault_service" "$fault_label"
   capture_service_filter "$fault_service" "$fault_label-counters.txt"
@@ -1537,11 +1417,11 @@ run_client_with_fault() {
       "$response_service" 500ms native-server-recovery-response-qdisc.txt
   fi
   # Baseline immediately before restoration. Any later increments therefore
-  # prove full-session establishment and runtime-JWT authentication after recovery,
+  # prove full-session establishment and SCRAM authentication after recovery,
   # while an unchanged resumption count rejects reuse of the stale stream.
   connected=$(ejabberd_session_count "$user")
   connected_auth=$(ejabberd_auth_count "$user")
-  resumed_before=$(ejabberd_resume_count "$user")
+  resumed_before=$(ejabberd_log_count "Resumed session for $user@mesh.test/simple-e2e")
   timeline "$client $user pre-restore full_sessions=$connected authentications=$connected_auth resumptions=$resumed_before"
   restore_service_network "$fault_service" "$fault_label"
   if [[ $shaping_service != "$fault_service" ]]; then
@@ -1555,16 +1435,16 @@ run_client_with_fault() {
   BACKGROUND_PIDS=()
   after=$(ejabberd_session_count "$user")
   auth_after=$(ejabberd_auth_count "$user")
-  resumed_after=$(ejabberd_resume_count "$user")
+  resumed_after=$(ejabberd_log_count "Resumed session for $user@mesh.test/simple-e2e")
   timeline "$client complete with $fault_label fault after_sessions=$after"
   if [[ $after -le $connected ]]; then
-    die "$fault_label outage did not produce a fresh full c2s session for $(agent_id_for "$user")"
+    die "$fault_label outage did not produce a fresh full c2s session for $user@mesh.test"
   fi
   if [[ $auth_after -le $connected_auth ]]; then
-    die "$fault_label outage did not produce fresh runtime-JWT authentication for $(agent_id_for "$user")"
+    die "$fault_label outage did not produce fresh SCRAM authentication for $user@mesh.test"
   fi
   if [[ $resumed_after -ne $resumed_before ]]; then
-    die "$fault_label outage resumed the stale XEP-0198 session for $(agent_id_for "$user")"
+    die "$fault_label outage resumed the stale XEP-0198 session for $user@mesh.test"
   fi
   # Installing a router rule and observing a container log are independent
   # environment operations. The already-dispatched response can cross the
@@ -1616,14 +1496,8 @@ docker compose version >/dev/null
 TRUNK_PREFIX=$(choose_trunk_prefix)
 [[ -n "$GO_CORE" ]] || die "set CYNAPSA_GO_CORE_PATH to a Go-core worktree"
 [[ -d "$GO_CORE/.git" || -f "$GO_CORE/.git" ]] || die "Go-core worktree not found: $GO_CORE"
-[[ -n "$TESTS" && -d "$TESTS/services/auth0-emulator" ]] || \
-  die "set CYNAPSA_TESTS_PATH to the CynapsaTests worktree"
-[[ -n "$MANAGEMENT" && -d "$MANAGEMENT/backend" ]] || \
-  die "set CYNAPSA_MANAGEMENT_PATH to the aztmmanagement worktree"
-[[ -n "$ENROLLMENT" && -f "$ENROLLMENT/Dockerfile" ]] || \
-  die "set CYNAPSA_ENROLLMENT_PATH to the Enrollment worktree"
-[[ -n "$EJABBERD" && -f "$EJABBERD/Dockerfile" ]] || \
-  die "set CYNAPSA_EJABBERD_PATH to the custom ejabberd worktree"
+[[ -f "$EJABBERD/Dockerfile" && -f "$EJABBERD/test/sdk-e2e/legacy.yml" ]] || \
+  die "dedicated ejabberd worktree not found: $EJABBERD"
 git -C "$GO_CORE" merge-base --is-ancestor "$CORE_BASE" HEAD || \
   die "Go-core worktree must be based on pinned main $CORE_BASE"
 
@@ -1632,90 +1506,103 @@ trap 'cleanup $?' EXIT
 trap 'cleanup 130' INT
 trap 'cleanup 143' TERM
 python3 "$ROOT/record_core_provenance.py" "$GO_CORE" "$RUNTIME/core-provenance.json"
-python3 "$ROOT/auth_state.py" --state "$AUTH_STATE" --template "$ROOT/ejabberd.yml"
+
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 2 \
+  -subj '/CN=Cynapsa simple E2E CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' \
+  -keyout "$RUNTIME/ca-key.pem" -out "$RUNTIME/ca.pem" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -sha256 -nodes -subj '/CN=mesh.test' \
+  -addext 'subjectAltName=DNS:mesh.test,IP:10.240.70.2' \
+  -keyout "$RUNTIME/server-key.pem" -out "$RUNTIME/server.csr" >/dev/null 2>&1
+printf '%s\n' 'subjectAltName=DNS:mesh.test,IP:10.240.70.2' 'extendedKeyUsage=serverAuth' >"$RUNTIME/server.ext"
+openssl x509 -req -sha256 -days 2 -in "$RUNTIME/server.csr" \
+  -CA "$RUNTIME/ca.pem" -CAkey "$RUNTIME/ca-key.pem" -CAcreateserial \
+  -extfile "$RUNTIME/server.ext" -out "$RUNTIME/server-cert.pem" >/dev/null 2>&1
+cp "$RUNTIME/server-cert.pem" "$RUNTIME/server.pem"
+cat "$RUNTIME/server-key.pem" >>"$RUNTIME/server.pem"
+chmod 0644 "$RUNTIME/ca.pem" "$RUNTIME/server.pem"
 
 umask 077
 {
-  printf 'CYNAPSA_E2E_AUTH_STATE=%s\n' "$AUTH_STATE"
+  printf 'CYNAPSA_E2E_RUNTIME_DIR=%s\n' "$RUNTIME"
   printf 'CYNAPSA_GO_CORE_PATH=%s\n' "$GO_CORE"
-  printf 'CYNAPSA_TESTS_PATH=%s\n' "$TESTS"
-  printf 'CYNAPSA_MANAGEMENT_PATH=%s\n' "$MANAGEMENT"
-  printf 'CYNAPSA_ENROLLMENT_PATH=%s\n' "$ENROLLMENT"
   printf 'CYNAPSA_EJABBERD_PATH=%s\n' "$EJABBERD"
   printf 'CYNAPSA_E2E_IMAGE_TAG=%s\n' "$IMAGE_TAG"
   printf 'CYNAPSA_E2E_TRUNK_PREFIX=%s\n' "$TRUNK_PREFIX"
-  printf 'CYNAPSA_E2E_HOST_UID=%s\n' "$(id -u)"
-  printf 'CYNAPSA_E2E_HOST_GID=%s\n' "$(id -g)"
+  printf 'CYNAPSA_TURN_STATIC_AUTH_SECRET=%s\n' "$(openssl rand -hex 32)"
+  for user in "${USERS[@]}"; do
+    variable=$(printf '%s' "$user" | tr '[:lower:]-' '[:upper:]_')_PASSWORD
+    printf '%s=%s\n' "$variable" "$(openssl rand -hex 24)"
+  done
 } >"$RUNTIME/credentials.env"
 
 # shellcheck disable=SC1091
 source "$RUNTIME/credentials.env"
+python3 - "$RUNTIME/credentials.env" "$EJABBERD/test/sdk-e2e/legacy.yml" "$RUNTIME/ejabberd.yml" <<'PY'
+from pathlib import Path
+import sys
 
-# Bind-mounted private inputs must be owned by the unprivileged service UIDs.
-# Docker Desktop cannot change ownership on a bind-mounted file whose host mode
-# is already 0400. Temporarily restore the owner's write bit; the isolated
-# helper immediately assigns the service UID and returns the cookie to 0400.
-chmod 0600 "$AUTH_STATE/secrets/erlang-cookie"
-docker run --rm --network none -v "$AUTH_STATE:/state" alpine:3.23 sh -ec '
-  chown 10001:10001 /state/secrets/auth0-client-secret /state/secrets/auth0-bootstrap-secret /state/secrets/auth0-signing-key.pem /state/certs/auth0.key
-  chown 65532:65532 /state/secrets/enrollment-management-service-token /state/certs/enrollment.key
-  chown 9000:9000 /state/secrets/ejabberd-api-password /state/secrets/erlang-cookie /state/config/ejabberd.yml /state/certs/ejabberd.key
-  chmod 0600 /state/secrets/auth0-client-secret /state/secrets/auth0-bootstrap-secret /state/secrets/auth0-signing-key.pem /state/certs/auth0.key /state/secrets/enrollment-management-service-token /state/certs/enrollment.key /state/secrets/ejabberd-api-password /state/config/ejabberd.yml /state/certs/ejabberd.key
-  chmod 0400 /state/secrets/erlang-cookie
-'
+values = dict(
+    line.split("=", 1)
+    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+    if "=" in line
+)
+text = Path(sys.argv[2]).read_text(encoding="utf-8")
+Path(sys.argv[3]).write_text(
+    text.replace("@CYNAPSA_TURN_STATIC_AUTH_SECRET@", values["CYNAPSA_TURN_STATIC_AUTH_SECRET"]),
+    encoding="utf-8",
+)
+PY
+cp "$ROOT/coturn-stun.conf" "$RUNTIME/coturn-stun.conf"
+python3 - "$RUNTIME/credentials.env" "$ROOT/coturn-turn.conf.in" "$RUNTIME/coturn-turn.conf" <<'PY'
+from pathlib import Path
+import sys
 
-# Provision against the real local service stack before application startup.
-compose --profile provision config --quiet
-compose --profile provision --profile workload --profile clients build \
-  router auth0 ejabberd management enrollment native-server
+values = dict(
+    line.split("=", 1)
+    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+    if "=" in line
+)
+text = Path(sys.argv[2]).read_text(encoding="utf-8")
+Path(sys.argv[3]).write_text(
+    text.replace("@CYNAPSA_TURN_STATIC_AUTH_SECRET@", values["CYNAPSA_TURN_STATIC_AUTH_SECRET"]),
+    encoding="utf-8",
+)
+PY
+chmod 0644 "$RUNTIME/ejabberd.yml" "$RUNTIME/coturn-stun.conf" "$RUNTIME/coturn-turn.conf"
+
+# Compose validates interpolated configuration before any state is created.
+compose config --quiet
+compose build router native-server-net ejabberd native-server
 docker pull "$COTURN_IMAGE" >/dev/null
-compose --profile provision up -d controller
+compose up -d router stun turn ejabberd
 wait_healthy router
 wait_healthy ejabberd-net
 wait_healthy stun-net
 wait_healthy turn-net
-wait_healthy postgres-net
-wait_healthy auth0-net
-wait_healthy management-net
-wait_healthy enrollment-net
-wait_healthy controller-net
 wait_healthy stun
 wait_healthy turn
 wait_healthy ejabberd
-wait_healthy postgres
-wait_healthy auth0
-wait_healthy management
-wait_healthy enrollment
-wait_completed controller
-
-# shellcheck disable=SC1091
-source "$AUTH_STATE/sdk-e2e.env"
-export CYNAPSA_MESH_ID
 
 ready=$(ejabberdctl cynapsa_mesh_ready mesh.test)
 [[ "$ready" == $'ready\tmesh.test\tsingle_node_mnesia' ]] || die "mesh module readiness mismatch: $ready"
-snapshot=$(ejabberdctl cynapsa_mesh_snapshot "$CYNAPSA_MESH_ID" mesh.test)
-for user in "${USERS[@]}"; do
-  [[ "$snapshot" == *"$(agent_id_for "$user")"* ]] || die "mesh snapshot omits $user"
-done
-printf '%s\n' "$snapshot" >"$RUNTIME/mesh-snapshot.txt"
-python3 - "$AUTH_STATE/sdk-e2e-expected.json" "$RUNTIME/auth-identity-hashes.json" <<'PY'
-import hashlib, json, sys
-from pathlib import Path
 
-state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-evidence = {
-    "identity_provider": "local-auth0-emulator",
-    "qualification_scope": "local-offline-contract",
-    "mesh_id_sha256": hashlib.sha256(state["mesh_id"].encode()).hexdigest(),
-    "agent_id_sha256": {
-        agent["label"]: hashlib.sha256(agent["agent_id"].encode()).hexdigest()
-        for agent in state["agents"]
-    },
-}
-Path(sys.argv[2]).write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
-PY
-cp "$AUTH_STATE/auth-contract.json" "$RUNTIME/auth-contract.json"
+for user in "${USERS[@]}"; do
+  variable=$(printf '%s' "$user" | tr '[:lower:]-' '[:upper:]_')_PASSWORD
+  password=${!variable}
+  ejabberdctl register "$user" mesh.test "$password" >/dev/null
+done
+ejabberdctl cynapsa_mesh_create simple-e2e mesh.test >/dev/null
+for user in "${USERS[@]}"; do
+  ejabberdctl cynapsa_mesh_add "$user" mesh.test simple-e2e >/dev/null
+done
+snapshot=$(ejabberdctl cynapsa_mesh_snapshot simple-e2e mesh.test)
+for user in "${USERS[@]}"; do
+  [[ "$snapshot" == *"$user@mesh.test"* ]] || die "mesh snapshot omits $user: $snapshot"
+done
+printf '%s\n' "$snapshot" >"$ARTIFACTS/mesh-snapshot.txt"
 
 compose up -d native-server-net monkey-server-net
 wait_healthy native-server-net
@@ -1730,10 +1617,6 @@ delay_service_xmpp_flow monkey-server-net 10ms monkey-server-short-resume-delay.
 compose up -d native-server monkey-server
 wait_healthy native-server
 wait_healthy monkey-server
-wait_for_resource_ready native-server
-wait_for_resource_ready monkey-server
-remember_runtime_resource native-server
-remember_runtime_resource monkey-server
 start_authority_trace
 CLIENT_SIDECARS=()
 while IFS= read -r sidecar; do
@@ -1743,17 +1626,6 @@ compose --profile clients up -d "${CLIENT_SIDECARS[@]}"
 for service in "${CLIENT_SIDECARS[@]}"; do
   wait_healthy "$service"
 done
-
-if [[ " ${CLIENTS[*]} " == *" monkey-async-client "* ]]; then
-  # Enroll this installation while HTTPS is still available. Its actual
-  # workload later uses token-free installation login after the router permits
-  # only XMPP TCP/5222; application code receives no fault-specific signal.
-  compose --profile clients run --rm --no-deps monkey-async-client \
-    python -c 'import cynapsa; from cynapsa_e2e.settings import auth; session = cynapsa.connect(**auth()); session.close()' \
-    >"$RUNTIME/monkey-async-pre-enrollment.log" 2>&1 || \
-    die "monkey-async pre-enrollment failed"
-  MONKEY_ASYNC_INSTALLATION_ONLY=1
-fi
 
 # Before application RPCs, prove XMPP STARTTLS plus tagged, source-preserving
 # cross-VLAN TCP and UDP. The probe runs only in dedicated sidecar namespaces.
@@ -1780,7 +1652,7 @@ done
 [[ "$probe_result" == $'10.240.10.2\t10.240.10.2' ]] || \
   die "tagged TCP/UDP source mismatch: ${probe_result:-no result received}"
 compose exec -T router sh -c \
-  '! ip -4 -o address show dev eth0 scope global | grep -q . && ! ip -4 route show dev eth0 | grep -q . && [ "$(ip -d link show type vlan | grep -c "^[0-9]")" -eq 14 ] && [ "$(sysctl -n net.ipv4.conf.all.send_redirects)" -eq 0 ] && ! iptables -t nat -S | grep -Eq "(MASQUERADE|SNAT|DNAT)"' || \
+  '! ip -4 -o address show dev eth0 scope global | grep -q . && ! ip -4 route show dev eth0 | grep -q . && [ "$(ip -d link show type vlan | grep -c "^[0-9]")" -eq 9 ] && [ "$(sysctl -n net.ipv4.conf.all.send_redirects)" -eq 0 ] && ! iptables -t nat -S | grep -Eq "(MASQUERADE|SNAT|DNAT)"' || \
   die "router trunk/VLAN/redirect/NAT invariant failed"
 compose exec -T stun turnutils_stunclient -p 3478 10.240.80.2 \
   >"$RUNTIME/stun-protocol-ready.log" 2>&1 || die "STUN protocol readiness failed"
@@ -1791,7 +1663,7 @@ compose exec -T native-server-net rm -f \
   /tmp/cynapsa-network-probe-ready /tmp/cynapsa-network-probe
 capture_artifact "$RUNTIME/stun-protocol-ready.log" stun-protocol-ready.log
 capture_artifact "$RUNTIME/turn-protocol-ready.log" turn-protocol-ready.log
-printf 'simple-e2e: tagged network probe PASS (XMPP STARTTLS, TCP+UDP source 10.240.10.2, routed gateway, 14 VLANs, auth services ready, STUN/TURN ready, untagged IP absent, NAT empty)\n'
+printf 'simple-e2e: tagged network probe PASS (XMPP STARTTLS, TCP+UDP source 10.240.10.2, routed gateway, 9 VLANs, STUN/TURN ready, untagged IP absent, NAT empty)\n'
 if [[ ${CYNAPSA_E2E_PROBE_ONLY:-0} == 1 ]]; then
   printf 'simple-e2e: probe-only PASS; artifacts: %s\n' "$ARTIFACTS"
   exit 0
@@ -1962,24 +1834,22 @@ compose logs --no-color turn >"$RUNTIME/turn.log" 2>&1 || true
 capture_authority_trace
 {
   for user in "${USERS[@]}"; do
-    resource=$(runtime_resource_for "$user")
-    count=$({ grep -F "Opened c2s session for $resource" "$RUNTIME/ejabberd.log" || true; } | wc -l | tr -d '[:space:]')
-    printf '%s\t%s\n' "$resource" "$count"
+    count=$({ grep -F "Opened c2s session for $user@mesh.test/simple-e2e" "$RUNTIME/ejabberd.log" || true; } | wc -l | tr -d '[:space:]')
+    printf '%s\t%s\n' "$user@mesh.test/simple-e2e" "$count"
   done
 } >"$RUNTIME/ejabberd-full-sessions.txt"
 SESSION_USERS=(native-server monkey-server "${CLIENTS[@]}")
 for user in "${SESSION_USERS[@]}"; do
-  resource=$(runtime_resource_for "$user")
-  grep -Fq "Opened c2s session for $resource" \
+  grep -Fq "Opened c2s session for $user@mesh.test/simple-e2e" \
     "$RUNTIME/ejabberd.log" || \
-    die "ejabberd log omits exact runtime-v2 session for $user"
+    die "ejabberd log omits exact mesh-resource session for $user@mesh.test"
 done
 if [[ $DEEP_EVIDENCE_NATIVE_FAULT -eq 1 ]]; then
-  native_fault_sessions=$(ejabberd_session_count native-server)
+  native_fault_sessions=$(awk '$1 == "native-server@mesh.test/simple-e2e" {print $2}' "$RUNTIME/ejabberd-full-sessions.txt")
   [[ ${native_fault_sessions:-0} -ge 2 ]] || die "native-server outage did not leave fresh full c2s evidence"
 fi
 if [[ $DEEP_EVIDENCE_MONKEY_FAULT -eq 1 ]]; then
-  monkey_fault_sessions=$(ejabberd_session_count monkey-async-client)
+  monkey_fault_sessions=$(awk '$1 == "monkey-async-client@mesh.test/simple-e2e" {print $2}' "$RUNTIME/ejabberd-full-sessions.txt")
   [[ ${monkey_fault_sessions:-0} -ge 2 ]] || die "monkey-async-client outage did not leave fresh full c2s evidence"
 fi
 {
@@ -1991,11 +1861,12 @@ fi
   printf 'monkey_sync_client_midflight_successful_resume=%s\n' "$DEEP_EVIDENCE_CLIENT_RESUME"
   printf 'xep0198_resume_timeout_seconds=15\n'
   printf 'short_fault_release_condition=ejabberd_resumable_stream_transition\n'
-  printf 'short_resume_pre_resume_runtime_jwt_reconnect_delta=%s\n' \
+  printf 'short_resume_pre_resume_scram_reconnect_delta=%s\n' \
     "$((DEEP_EVIDENCE_SERVER_RESUME + DEEP_EVIDENCE_CLIENT_RESUME))"
   printf 'short_resume_replacement_bound_session_delta=0\n'
+  printf 'short_resume_authority_discovery_delta=0\n'
   printf 'short_resume_authority_snapshot_delta=0\n'
-  printf 'short_resume_context_copy_delta=%s\n' \
+  printf 'short_resume_authority_barrier_ready_delta=%s\n' \
     "$((DEEP_EVIDENCE_SERVER_RESUME + DEEP_EVIDENCE_CLIENT_RESUME))"
   printf 'fault_release_condition=xep0198_resume_window_expired\n'
   printf 'native_async_nat_packet_delta=%s\n' "$NATIVE_NAT_DELTA"
@@ -2048,7 +1919,7 @@ python3 "$ROOT/verify_results.py" \
   "$RUNTIME/native-async-client.log" \
   "$RUNTIME/monkey-sync-client.log" \
   "$RUNTIME/monkey-async-client.log" >"$RUNTIME/summary.base.json"
-python3 - "$RUNTIME/summary.base.json" "$RUNTIME/deep-evidence.txt" "$RUNTIME/auth-contract.json" "$RUNTIME/summary.json" <<'PY'
+python3 - "$RUNTIME/summary.base.json" "$RUNTIME/deep-evidence.txt" "$RUNTIME/summary.json" <<'PY'
 from __future__ import annotations
 
 import json
@@ -2079,8 +1950,7 @@ for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
         except ValueError:
             evidence[key] = value
 summary["deep_evidence"] = evidence
-summary.update(json.loads(Path(sys.argv[3]).read_text(encoding="utf-8")))
-Path(sys.argv[4]).write_text(json.dumps(summary, sort_keys=True) + "\n", encoding="utf-8")
+Path(sys.argv[3]).write_text(json.dumps(summary, sort_keys=True) + "\n", encoding="utf-8")
 PY
 capture_artifact "$RUNTIME/summary.json" summary.json
-printf 'SDK six-agent local/offline contract PASS 80/80; identity-provider=local-auth0-emulator; artifacts: %s\n' "$ARTIFACTS"
+printf 'simple-e2e: PASS 80/80; artifacts: %s\n' "$ARTIFACTS"

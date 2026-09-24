@@ -188,6 +188,7 @@ func (s *melliumSession) handleJingleIQResult(ctx context.Context, source xml.To
 	peer, peerErr := jid.Parse(issued.to)
 	local, localErr := jid.Parse(issued.from)
 	if peerErr != nil || localErr != nil || iq.From.String() != peer.String() || iq.To.String() != local.String() {
+		emitInboundAuthRejection(ctx, outer, "jingle_result_address")
 		return ErrAuthentication
 	}
 	if iqType, attrsOK := validCorrelatedIQAttrs(outer.Attr, iq.ID, peer, local); !attrsOK || iqType != stanza.ResultIQ {

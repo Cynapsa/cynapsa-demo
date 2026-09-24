@@ -28,6 +28,7 @@ from .http import (
 from .exceptions import (
     NativeError,
     RemoteApplicationError,
+    RemoteNativeError,
     RPCException,
     SdkSafetyTimeout,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "HttpBridgeHandle",
     "NativeError",
     "RemoteApplicationError",
+    "RemoteNativeError",
     "RPCException",
     "ConnectivityStateChanged",
     "CoreError",

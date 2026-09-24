@@ -49,19 +49,32 @@ and exact owned body bytes. Native shorthand accepts exact `bytes`, UTF-8
 `str`, strict JSON-compatible values, or an explicit `CynapsaRequest`; it uses
 `POST`, the selected path, and an empty query.
 
-Every RPC application result is a `CynapsaResponse` containing status, reason,
-duplicate-preserving header pairs, exact owned body bytes, and optional safe
-`CynapsaApplicationError` metadata. Native request calls return this model
-directly. They never raise automatically for a remote 4xx/5xx response;
-`raise_for_error()` is explicit.
+Every RPC application result is a canonical `CynapsaResponse` containing status,
+reason, duplicate-preserving header pairs, exact owned body bytes, and optional
+safe `CynapsaApplicationError` metadata. Native request calls return this
+model on success. For remote 4xx/5xx results they raise `RemoteNativeError`,
+a `NativeError` whose `.response` retains the full dependency-free canonical
+response, not an HTTP-library object. An intermediate native handler may
+explicitly return that response to forward its status, headers, body, and
+error metadata; an unhandled exception becomes a sanitized `500 handler_error`.
+Because forwarding crosses a trust boundary, intermediaries should remove
+sensitive and hop-by-hop headers and private body details, or construct a new
+sanitized `CynapsaResponse` or `RPCException` instead.
+HTTP hooks project the same canonical result into their library's usual
+response or error behavior.
 
 The optional error is a distinct canonical response field, never a reserved
 application header. Its details are a bounded JSON object. A response carrying
 error metadata must use a 4xx or 5xx status; 4xx/5xx responses without that
 metadata remain valid, including responses produced by HTTP frameworks.
 
-HTTP Bridge preserves the normal calling style and returns the expected
-`requests`, `httpx`, `urllib3`, `urllib.request`, or `aiohttp` response object.
+HTTP Bridge preserves the normal calling style and projects the result for
+`requests`, `httpx`, `urllib3`, `urllib.request`, or `aiohttp`. In particular,
+`urllib.request.urlopen()` raises `HTTPError` for a 404, while `requests` and
+`httpx` return response objects until their explicit error-check methods run.
+Mapped `urlopen` also raises `HTTPError` for 304 and follows redirects only
+within the same virtual origin; cross-origin redirects do not escape to the
+ordinary network path.
 The server never needs to know which caller library will receive its response.
 
 Current payloads are bounded, fully materialized bytes, text, JSON, or HTTP

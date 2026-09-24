@@ -45,19 +45,22 @@ func TestRank2PumpContinuesAfterAcceptedPeerLaneRetirement(t *testing.T) {
 		acceptPeerRetirementDelivery(t, core, received.ID, sequence)
 	}
 
-	// Removing A uses the real peer-registry terminal lane seam. Its owner
-	// fences and joins that lane and closes only A's live transport; the sole
-	// mesh-wide Rank2 pump must remain available for another peer.
-	session.replaceGroup(rank2xmpp.AuthoritySnapshot{Members: []string{
-		"agent@example.test/mesh-one",
-		peerRetirementPeerB + "/mesh-one",
-	}}, nil)
-	refresh := qaStageBCompletion(t, core, v1.MeshMembershipRefreshCommand{
-		CommandBase: qaStageBBase("peer-retirement-refresh"),
-	})
-	if !refresh.OK || refresh.Error != nil {
-		t.Fatalf("retire peer A lane = %#v", refresh)
+	// The server's logical revoke, not a new group snapshot, retires A's
+	// exact lane. The action ACK follows cleanup, and the Rank2 pump remains
+	// available for another peer's first-contact handshake.
+	session.emit(rank2xmpp.Event{Kind: rank2xmpp.EventPeerRevoked, ControlID: "revoke-peer-a", Revocations: []rank2xmpp.Revocation{{Type: rank2xmpp.RevokeLogical, Peer: peerRetirementPeerA}}})
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, _, acknowledged := session.peerQuerySnapshot()
+		if len(acknowledged) == 1 && acknowledged[0] == "revoke-peer-a" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("logical revoke cleanup did not produce action ACK")
+		}
+		time.Sleep(time.Millisecond)
 	}
+	session.setPeer(peerRetirementPeerA, rank2xmpp.AuthorizedPeer{}, rank2xmpp.ErrAuthentication)
 	qaStageBAllow(t, core, "peer-retirement-policy-b", peerRetirementPath, peerRetirementPeerB)
 
 	session.emit(peerRetirementInboundEvent(t, peerRetirementPeerB, "peer-b-after-a-retired"))
@@ -131,7 +134,10 @@ func peerRetirementInboundEvent(t *testing.T, senderBare, body string) rank2xmpp
 	if err != nil {
 		t.Fatal(err)
 	}
-	sender := senderBare + "/mesh-one"
+	sender := senderBare + "/r2.install-peer.nonce-1"
+	if senderBare == peerRetirementPeerB {
+		sender = senderBare + "/r2.install-peer-b.nonce-1"
+	}
 	conversationID, err := conversation.DeriveID("mesh-one", "agent@example.test/mesh-one", sender)
 	if err != nil {
 		t.Fatal(err)

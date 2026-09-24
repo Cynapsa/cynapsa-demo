@@ -26,10 +26,12 @@ func (dialer builtInTestDialer) Dial(context.Context) (rank2xmpp.Session, error)
 }
 
 type builtInTestSession struct {
-	mu       sync.Mutex
-	username string
-	closed   chan struct{}
-	once     sync.Once
+	mu        sync.Mutex
+	username  string
+	syncCalls int
+	peerCalls int
+	closed    chan struct{}
+	once      sync.Once
 }
 
 func newBuiltInTestSession() *builtInTestSession {
@@ -79,8 +81,21 @@ func (*builtInTestSession) QueryServerTime(context.Context) (time.Time, error) {
 	return time.Date(2030, 1, 2, 3, 4, 5, 123456000, time.UTC), nil
 }
 
-func (*builtInTestSession) SyncAuthority(context.Context) (rank2xmpp.AuthoritySnapshot, error) {
+func (session *builtInTestSession) SyncAuthority(context.Context) (rank2xmpp.AuthoritySnapshot, error) {
+	session.mu.Lock()
+	session.syncCalls++
+	session.mu.Unlock()
 	return rank2xmpp.AuthoritySnapshot{Members: []string{"agent@example.test/mesh-one", "peer@example.test/mesh-one"}}, nil
+}
+
+func (session *builtInTestSession) ResolveAuthorizedPeer(_ context.Context, bare string) (rank2xmpp.AuthorizedPeer, error) {
+	session.mu.Lock()
+	session.peerCalls++
+	session.mu.Unlock()
+	if bare != "peer@example.test" {
+		return rank2xmpp.AuthorizedPeer{}, rank2xmpp.ErrUnavailable
+	}
+	return rank2xmpp.AuthorizedPeer{FullJID: "peer@example.test/r2.install-peer.nonce-1", InstallationID: "install-peer", SessionGeneration: "session-1"}, nil
 }
 
 func (*builtInTestSession) Send(context.Context, rank2xmpp.Stanza) error { return nil }
@@ -117,11 +132,12 @@ func TestBuiltInConnectivityAuthenticatesBothSDKPersonalities(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			session := newBuiltInTestSession()
 			factory := newBuiltInConnectivityFactory(func(endpoint string, _ sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
 				if parsed, err := rank2xmpp.ParseEndpoint(endpoint); err != nil || parsed.DialAddress() != "mesh.example.test:5222" || parsed.TLSServerName() != "mesh.example.test" {
 					t.Fatalf("endpoint = %#v, %v", parsed, err)
 				}
-				return builtInTestDialer{session: newBuiltInTestSession()}, nil
+				return builtInTestDialer{session: session}, nil
 			})
 			core := newTestCoreWithConnectivity(t, factory)
 			base := v1.CommandBase{CommandID: v1.CommandID("auth-" + test.name), SDKSessionID: v1.SDKSessionID("session-" + test.name)}
@@ -143,8 +159,13 @@ func TestBuiltInConnectivityAuthenticatesBothSDKPersonalities(t *testing.T) {
 				t.Fatalf("Status = %#v, %v", status, err)
 			}
 
-			// The authoritative post-auth messaging graph is committed with the
-			// same authenticated identity and server-owned group snapshot.
+			// Login publishes only the local identity. The first outbound send
+			// performs its own server-authorized peer handshake.
+			session.mu.Lock()
+			if session.syncCalls != 0 || session.peerCalls != 0 {
+				t.Fatalf("login queried group/peer before first contact: sync=%d peer=%d", session.syncCalls, session.peerCalls)
+			}
+			session.mu.Unlock()
 			admission, err = core.Submit(context.Background(), v1.MeshListCommand{CommandBase: v1.CommandBase{CommandID: v1.CommandID("mesh-list-" + test.name), SDKSessionID: base.SDKSessionID}})
 			if err != nil || !admission.Accepted {
 				t.Fatalf("mesh list admission = %#v, %v", admission, err)
@@ -179,8 +200,18 @@ func TestBuiltInConnectivityAuthenticatesBothSDKPersonalities(t *testing.T) {
 			completion, err = core.NextCompletion(context.Background())
 			sendResult, ok := completion.Result.(v1.SendResult)
 			if err != nil || !completion.OK || !ok || !sendResult.Accepted || sendResult.MessageID == "" || sendResult.ConversationID == "" {
-				t.Fatalf("message completion = %#v, %v", completion, err)
+				session.mu.Lock()
+				syncCalls, peerCalls := session.syncCalls, session.peerCalls
+				session.mu.Unlock()
+				t.Fatalf("message completion = %#v error=%+v, %v sync=%d peer=%d", completion, completion.Error, err, syncCalls, peerCalls)
 			}
+			session.mu.Lock()
+			// Rank1 establishment may race this first Rank2 send and performs
+			// its own fresh server handshake by contract.
+			if session.syncCalls != 0 || session.peerCalls < 1 || session.peerCalls > 2 {
+				t.Fatalf("first send handshake count: sync=%d peer=%d", session.syncCalls, session.peerCalls)
+			}
+			session.mu.Unlock()
 			shutdownAndDrain(t, core)
 			if err := core.Destroy(); err != nil {
 				t.Fatal(err)

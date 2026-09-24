@@ -362,6 +362,20 @@ func (outbox *Outbox) MarkTerminal(messageID string) error {
 	return outbox.store.Delete(messageID)
 }
 
+// RetireServerRejected removes one message named by an authenticated server
+// routing error, including an entry currently owned by a carrier.
+func (outbox *Outbox) RetireServerRejected(messageID string) error {
+	if outbox == nil || messageID == "" {
+		return ErrInvalidEvidence
+	}
+	outbox.mu.Lock()
+	defer outbox.mu.Unlock()
+	if outbox.destroyed {
+		return ErrUnknownEntry
+	}
+	return outbox.store.retireServerRejected(messageID)
+}
+
 // MarkUnownedTerminal removes an entry only while no durable carrier owns it.
 // It is the atomic terminal edge used by Rank1 acceptance and delivery.drop.
 func (outbox *Outbox) MarkUnownedTerminal(messageID string) error {
@@ -502,6 +516,21 @@ func (outbox *Outbox) RetireRank2Owned(messageID string, transportOrdinal uint64
 	outbox.mu.Lock()
 	defer outbox.mu.Unlock()
 	return outbox.store.retireRank2(messageID, transportOrdinal)
+}
+
+// ReleaseRank2Owned returns exactly one old-session carrier claim to the
+// general queue without deleting its immutable payload. A later custody
+// retirement or different transport ordinal cannot be undone by this call.
+func (outbox *Outbox) ReleaseRank2Owned(messageID string, transportOrdinal uint64) error {
+	if outbox == nil {
+		return ErrInvalidEvidence
+	}
+	outbox.mu.Lock()
+	defer outbox.mu.Unlock()
+	if outbox.destroyed {
+		return ErrUnknownEntry
+	}
+	return outbox.store.releaseRank2(messageID, transportOrdinal)
 }
 
 // MarkRank2Handled atomically retires only Rank2-owned entries covered by the

@@ -16,6 +16,19 @@ from e2e.simple.cynapsa_e2e import client_helpers, settings
 
 ROOT = Path(__file__).resolve().parents[1]
 E2E = ROOT / "e2e" / "simple"
+DEDICATED_EJABBERD = Path(
+    os.environ.get(
+        "CYNAPSA_EJABBERD_PATH",
+        ROOT.parent / "cynapsa" / "ejabberd-remove-snapshot",
+    )
+)
+
+
+def dedicated_ejabberd_file(relative_path: str) -> str:
+    path = DEDICATED_EJABBERD / relative_path
+    if not path.is_file():
+        pytest.skip(f"dedicated ejabberd checkout is unavailable: {path}")
+    return path.read_text(encoding="utf-8")
 
 
 def test_e2e_shell_scripts_parse() -> None:
@@ -88,38 +101,18 @@ def test_compose_launches_zero_change_http_agents_through_cli() -> None:
     ]
 
     for service in (server, client):
-        assert "exec cynapsa run" in service
-        assert "--token-file /run/cynapsa/auth/token" in service
-        assert '--mesh-id "$${CYNAPSA_MESH_ID}"' in service
-        assert '--profile-id "$${CYNAPSA_PROFILE_ID}"' in service
-        assert "--allow '*' '*'" in service
+        assert "      - cynapsa\n      - run\n" in service
+        assert "      - --password-env\n      - CYNAPSA_PASSWORD\n" in service
+        assert "      - --allow\n      - \"*\"\n      - \"*\"\n" in service
 
     assert "cynapsa_e2e.monkey_fastapi_server:app" in server
     assert "http://127.0.0.1:8000/openapi.json" in server
     assert "cynapsa_e2e.monkey_sync_client" in client
-    assert client.count("--map ") == 2
+    assert client.count("      - --map\n") == 2
     assert "https://native-server.test" in client
-    assert '"$${CYNAPSA_NATIVE_SERVER_AGENT_ID}"' in client
+    assert "native-server@mesh.test" in client
     assert "https://monkey-server.test" in client
-    assert '"$${CYNAPSA_MONKEY_SERVER_AGENT_ID}"' in client
-
-
-def test_xmpp_only_pre_enrollment_runs_only_when_monkey_async_is_selected() -> None:
-    source = (E2E / "run.sh").read_text(encoding="utf-8")
-    pre_enrollment = source[source.index('if [[ " ${CLIENTS[*]} "') : source.index(
-        "# Before application RPCs"
-    )]
-    assert '== *" monkey-async-client "*' in pre_enrollment
-    assert "CYNAPSA_ENROLLMENT_TOKEN_FILE=" in source
-    assert "MONKEY_ASYNC_INSTALLATION_ONLY=1" in pre_enrollment
-    assert "monkey-async-pre-enrollment.log" in source
-
-
-def test_artifact_sanitization_failure_makes_the_run_fail() -> None:
-    source = (E2E / "run.sh").read_text(encoding="utf-8")
-    cleanup = source[source.index("cleanup()") : source.index("wait_healthy()")]
-    assert "if ! assert_artifacts_sanitized; then" in cleanup
-    assert "status=1" in cleanup
+    assert "monkey-server@mesh.test" in client
 
 
 def test_sidecar_entrypoint_removes_untagged_ip_and_uses_vlan() -> None:
@@ -242,11 +235,8 @@ def test_async_target_cadence_is_generic_and_keeps_ten_requests_per_target() -> 
 def test_fault_campaign_rpc_timeout_is_validated_and_explicit_bounds_win(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CYNAPSA_MESH_ID", "mesh-id")
-    monkeypatch.setenv("CYNAPSA_PROFILE_ID", "test-profile")
-    monkeypatch.setenv("CYNAPSA_NATIVE_SERVER_AGENT_ID", "native@mesh.test")
-    monkeypatch.setenv("CYNAPSA_MONKEY_SERVER_AGENT_ID", "monkey@mesh.test")
-    monkeypatch.delenv("CYNAPSA_ENROLLMENT_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("CYNAPSA_USERNAME", "test@mesh.test")
+    monkeypatch.setenv("CYNAPSA_PASSWORD", "test")
     monkeypatch.delenv("CYNAPSA_E2E_RPC_TIMEOUT_MS", raising=False)
     assert settings.auth()["command_timeout_ms"] == 30_000
     assert settings.auth()["rpc_timeout_ms"] == 30_000
@@ -295,8 +285,8 @@ def test_compose_uses_sidecar_network_namespaces_and_limits_net_admin() -> None:
         "monkey-async-client",
     ):
         assert f"network_mode: service:{service}-net" in source
-    # Seven application/ejabberd LANs, STUN/TURN, and five auth-service LANs.
-    assert source.count("CYNAPSA_VLAN_ID:") == 14
+    # Seven application/ejabberd LANs plus isolated STUN and TURN LANs.
+    assert source.count("CYNAPSA_VLAN_ID:") == 9
     assert source.count("cap_add: [NET_ADMIN]") == 2
     assert "cap_add: [NET_ADMIN," not in source
     assert "CYNAPSA_E2E_ROLE" not in source
@@ -315,28 +305,18 @@ def test_rendered_compose_has_exact_namespace_privilege_and_vlan_contract(
     )
     if compose_version.returncode != 0:
         pytest.skip("Docker Compose is unavailable")
-    tests_checkout = tmp_path / "CynapsaTests"
-    management_checkout = tmp_path / "aztmmanagement"
-    enrollment_checkout = tmp_path / "Enrollment"
-    ejabberd_checkout = tmp_path / "ejabberd"
-    (tests_checkout / "services" / "auth0-emulator").mkdir(parents=True)
-    (tests_checkout / "scripts").mkdir()
-    (management_checkout / "backend").mkdir(parents=True)
-    enrollment_checkout.mkdir()
-    ejabberd_checkout.mkdir()
-    auth_state = tmp_path / "auth-state"
-    auth_state.mkdir()
     environment = {
         **os.environ,
-        "CYNAPSA_E2E_AUTH_STATE": str(auth_state),
-        "CYNAPSA_GO_CORE_PATH": str(ROOT),
-        "CYNAPSA_TESTS_PATH": str(tests_checkout),
-        "CYNAPSA_MANAGEMENT_PATH": str(management_checkout),
-        "CYNAPSA_ENROLLMENT_PATH": str(enrollment_checkout),
-        "CYNAPSA_EJABBERD_PATH": str(ejabberd_checkout),
+        "CYNAPSA_E2E_RUNTIME_DIR": str(tmp_path),
+            "CYNAPSA_GO_CORE_PATH": str(ROOT),
+            "CYNAPSA_EJABBERD_PATH": str(DEDICATED_EJABBERD),
         "CYNAPSA_E2E_IMAGE_TAG": "config-test",
-        "CYNAPSA_E2E_HOST_UID": str(os.getuid()),
-        "CYNAPSA_E2E_HOST_GID": str(os.getgid()),
+        "NATIVE_SERVER_PASSWORD": "test",
+        "MONKEY_SERVER_PASSWORD": "test",
+        "NATIVE_SYNC_CLIENT_PASSWORD": "test",
+        "NATIVE_ASYNC_CLIENT_PASSWORD": "test",
+        "MONKEY_SYNC_CLIENT_PASSWORD": "test",
+        "MONKEY_ASYNC_CLIENT_PASSWORD": "test",
     }
     completed = subprocess.run(
         [
@@ -344,10 +324,6 @@ def test_rendered_compose_has_exact_namespace_privilege_and_vlan_contract(
             "compose",
             "--profile",
             "clients",
-            "--profile",
-            "workload",
-            "--profile",
-            "provision",
             "-f",
             str(E2E / "compose.yaml"),
             "config",
@@ -373,26 +349,14 @@ def test_rendered_compose_has_exact_namespace_privilege_and_vlan_contract(
         config = services[application]
         assert config["network_mode"] == f"service:{sidecar}"
         assert config.get("networks") is None
-        # Docker rejects extra_hosts on a container that joins another
-        # service's network namespace. The shared namespace resolves the
-        # entries installed on its sidecar instead.
-        assert config.get("extra_hosts") is None
         assert config.get("privileged") in {None, False}
         assert config["cap_drop"] == ["ALL"]
         assert "NET_ADMIN" not in config.get("cap_add", [])
-        if application == "ejabberd":
-            assert config["cap_add"] == ["NET_BIND_SERVICE"]
-        else:
-            assert config.get("cap_add") is None
         assert config["read_only"] is True
         assert "no-new-privileges:true" in config["security_opt"]
 
     for application in applications.keys() - {"ejabberd"}:
         assert "CYNAPSA_ICE_TRANSPORT_POLICY" not in services[application]["environment"]
-
-    for service in ("stun", "turn", "postgres", "auth0", "management", "enrollment", "controller"):
-        assert services[service]["network_mode"] == f"service:{service}-net"
-        assert services[service].get("networks") is None
 
     sidecars = {
         "native-sync-client-net": ("101", "10.240.10.2/24", "10.240.10.1"),
@@ -402,19 +366,6 @@ def test_rendered_compose_has_exact_namespace_privilege_and_vlan_contract(
         "native-server-net": ("105", "10.240.50.2/24", "10.240.50.1"),
         "monkey-server-net": ("106", "10.240.60.2/24", "10.240.60.1"),
         "ejabberd-net": ("107", "10.240.70.2/24", "10.240.70.1"),
-        "stun-net": ("108", "10.240.80.2/24", "10.240.80.1"),
-        "turn-net": ("109", "10.240.90.2/24", "10.240.90.1"),
-        "postgres-net": ("110", "10.240.100.2/24", "10.240.100.1"),
-        "auth0-net": ("111", "10.240.110.2/24", "10.240.110.1"),
-        "management-net": ("112", "10.240.120.2/24", "10.240.120.1"),
-        "enrollment-net": ("113", "10.240.130.2/24", "10.240.130.1"),
-        "controller-net": ("114", "10.240.140.2/24", "10.240.140.1"),
-    }
-    expected_extra_hosts = {
-        "auth0.cynapsa.test=10.240.110.2",
-        "enrollment.cynapsa.com=10.240.130.2",
-        "management.cynapsa.test=10.240.120.2",
-        "mesh.test=10.240.70.2",
     }
     for sidecar, (vlan, address, gateway) in sidecars.items():
         config = services[sidecar]
@@ -427,7 +378,6 @@ def test_rendered_compose_has_exact_namespace_privilege_and_vlan_contract(
         assert config["environment"]["CYNAPSA_VLAN_ID"] == vlan
         assert config["environment"]["CYNAPSA_LAN_ADDRESS"] == address
         assert config["environment"]["CYNAPSA_LAN_GATEWAY"] == gateway
-        assert set(config["extra_hosts"]) == expected_extra_hosts
         assert set(config["networks"]) == {"trunk"}
 
     router = services["router"]
@@ -452,16 +402,6 @@ def test_runner_preserves_signal_failure_status_and_avoids_parallel_clients() ->
     assert "trap 'cleanup 130' INT" in source
     assert "trap 'cleanup 143' TERM" in source
     assert "CYNAPSA_E2E_CLIENT_EXECUTION" not in source
-
-
-def test_runner_temporarily_makes_cookie_writable_only_inside_cleanup_scope() -> None:
-    source = (E2E / "run.sh").read_text(encoding="utf-8")
-    trap = source.index("trap 'cleanup $?' EXIT")
-    writable = source.index('chmod 0600 "$AUTH_STATE/secrets/erlang-cookie"')
-    handoff = source.index('docker run --rm --network none -v "$AUTH_STATE:/state"')
-    readonly = source.index("chmod 0400 /state/secrets/erlang-cookie", handoff)
-
-    assert trap < writable < handoff < readonly
 
 
 def test_runner_quiesces_the_recovered_server_between_fault_campaigns() -> None:
@@ -511,7 +451,7 @@ def test_short_resume_campaigns_are_environment_only_and_cover_server_and_client
 
 def test_short_resume_uses_semantic_authority_and_lifecycle_counters() -> None:
     source = (E2E / "run.sh").read_text(encoding="utf-8")
-    trace = (E2E / "authority-trace-start.eval").read_text(encoding="utf-8")
+    trace = dedicated_ejabberd_file("test/sdk-e2e/authority-trace-start.eval")
     readme = (E2E / "README.md").read_text(encoding="utf-8")
     campaign = source[
         source.index("run_client_with_short_resume()") : source.index(
@@ -519,21 +459,29 @@ def test_short_resume_uses_semantic_authority_and_lifecycle_counters() -> None:
         )
     ]
     assert "ejabberd_resume_pending_count" in campaign
+    assert "authority_trace_count authority_discovery" in campaign
     assert "authority_trace_count authority_snapshot" in campaign
-    assert "authority_trace_count resume_context_copy" in campaign
+    assert "authority_trace_count resume_hook" in campaign
+    assert "authority_trace_count resume_authority_ready" in campaign
+    assert "authority_trace_count resume_authority_not_ready" in campaign
+    assert "after_discovery -eq $before_discovery" in campaign
     assert "after_snapshot -eq $before_snapshot" in campaign
     assert "after_expired -eq $before_expired" in campaign
-    assert "after_context_copy -eq $((before_context_copy + 1))" in campaign
+    assert "after_ready -eq $((before_ready + 1))" in campaign
+    assert "after_resume_hook -eq $((before_resume_hook + 1))" in campaign
     assert "recovery_auth_delta -eq 1" in campaign
     assert "replacement_bound_session_delta=0" in campaign
-    assert "pre_resume_runtime_jwt_reconnect_delta=%s" in campaign
+    assert "pre_resume_scram_reconnect_delta=%s" in campaign
     fault_ready = campaign.index('wait_for_resource_ready "$user"')
     client_ready = campaign.index('wait_for_resource_ready "$client"')
+    discovery_baseline = campaign.index(
+        "before_discovery=$(authority_trace_count authority_discovery)"
+    )
     snapshot_baseline = campaign.index(
         "before_snapshot=$(authority_trace_count authority_snapshot)"
     )
     request_baseline = campaign.index("request_baseline=$(request_event_count")
-    assert fault_ready < client_ready < snapshot_baseline
+    assert fault_ready < client_ready < discovery_baseline < snapshot_baseline
     assert client_ready < request_baseline < campaign.index(
         "in-flight RPC dispatch observed"
     )
@@ -543,7 +491,7 @@ def test_short_resume_uses_semantic_authority_and_lifecycle_counters() -> None:
     assert campaign.index("resumable-stream transition") < campaign.index(
         'restore_service_network "$fault_service" "$label"'
     ) < campaign.index("successful XEP-0198 resume") < campaign.index(
-        "verified resume-context copy"
+        "ready resume-authority result"
     ) < campaign.index('wait "$client_pid"')
     readme_text = " ".join(readme.split())
     assert (
@@ -555,11 +503,21 @@ def test_short_resume_uses_semantic_authority_and_lifecycle_counters() -> None:
         "every participant that can still move those global counters in the "
         "campaign is therefore already ready"
     ) in readme_text
-    for function in ("process_group_iq", "c2s_copy_session"):
+    assert (
+        "resume-time external-service replay or requery"
+    ) in readme_text
+    assert (
+        "it is distinct from Cynapsa mesh-authority discovery"
+    ) in readme_text
+    for function in (
+        "disco_local_features",
+        "process_group_iq",
+        "c2s_session_resumed",
+        "send_resume_authority_result",
+    ):
         assert function in trace
-    assert "resume_context_copy" in trace
-    assert "resume_authority_ready" not in trace
-    assert "resume_authority_not_ready" not in trace
+    assert "resume_authority_ready" in trace
+    assert "resume_authority_not_ready" in trace
     assert trace.index("Tracer = spawn(") < trace.index(
         "ets:new(cynapsa_e2e_authority_trace_counts"
     ) < trace.index("Parent ! {self(), ready}")
@@ -571,12 +529,12 @@ def test_short_resume_uses_semantic_authority_and_lifecycle_counters() -> None:
 
 
 def test_short_resume_window_covers_pre_bind_tls_and_sasl_reconnect() -> None:
-    config = (E2E / "ejabberd.yml").read_text(encoding="utf-8")
+    config = dedicated_ejabberd_file("test/sdk-e2e/legacy.yml")
     source = (E2E / "run.sh").read_text(encoding="utf-8")
     readme = (E2E / "README.md").read_text(encoding="utf-8")
     assert "resume_timeout: 15" in config
     assert "xep0198_resume_timeout_seconds=15" in source
-    assert "pre-resume runtime-JWT reconnect" in readme
+    assert "pre-resume SCRAM reconnect" in readme
     assert "new bound session" in readme
 
 
@@ -595,11 +553,11 @@ def test_filtered_run_reports_only_executed_short_resume_campaigns() -> None:
     campaign_total = (
         '"$((DEEP_EVIDENCE_SERVER_RESUME + DEEP_EVIDENCE_CLIENT_RESUME))"'
     )
-    assert "short_resume_pre_resume_runtime_jwt_reconnect_delta=%s" in source
-    assert "short_resume_context_copy_delta=%s" in source
+    assert "short_resume_pre_resume_scram_reconnect_delta=%s" in source
+    assert "short_resume_authority_barrier_ready_delta=%s" in source
     assert source.count(campaign_total) == 2
-    assert "short_resume_pre_resume_runtime_jwt_reconnect_delta=2" not in source
-    assert "short_resume_context_copy_delta=2" not in source
+    assert "short_resume_pre_resume_scram_reconnect_delta=2" not in source
+    assert "short_resume_authority_barrier_ready_delta=2" not in source
 
 
 def test_core_provenance_records_dirty_and_untracked_build_inputs(tmp_path: Path) -> None:
@@ -646,18 +604,31 @@ def test_core_provenance_records_dirty_and_untracked_build_inputs(tmp_path: Path
     assert any(line.endswith(" tracked.go") for line in manifest["status_porcelain_v1"])
 
 
-def test_ejabberd_image_pins_current_deterministic_authority_beam() -> None:
-    dockerfile = (E2E / "Dockerfile.ejabberd").read_text(encoding="utf-8")
-    assert (
-        "149bd73a6e3752a8e81f0234386f92f1011fe4902337f5c52bab22c90e5fbfcb"
-        in dockerfile
-    )
-    assert "sha256sum -c -" in dockerfile
+def test_sdk_has_no_ejabberd_image_or_server_fixtures() -> None:
+    compose = (E2E / "compose.yaml").read_text(encoding="utf-8")
+    overlay = (E2E / "compose.peer-authority.yaml").read_text(encoding="utf-8")
+    runner = (E2E / "run-peer-authority.sh").read_text(encoding="utf-8")
+    assert "context: ${CYNAPSA_EJABBERD_PATH:" in compose
+    assert "dockerfile: Dockerfile" in compose
+    ejabberd_overlay = overlay.split("  enrollment:", 1)[0]
+    assert "dockerfile:" not in ejabberd_overlay
+    assert not list(E2E.glob("Dockerfile.ejabberd*"))
+    assert not (E2E / "ejabberd-entrypoint.sh").exists()
+    assert not list(E2E.glob("ejabberd*.yml"))
+    assert not (E2E / "authority-trace-start.eval").exists()
+    assert '"$EJABBERD/test/sdk-e2e/peer-authority.yml"' in runner
+    assert '"$ARTIFACTS/ejabberd-provenance.json"' in runner
+
+
+def test_ejabberd_image_builds_dedicated_authority_with_provenance() -> None:
+    dockerfile = dedicated_ejabberd_file("Dockerfile")
+    assert "FROM ghcr.io/processone/ejabberd@sha256:" in dockerfile
+    assert "COPY src/*.erl" in dockerfile
 
 
 def test_xep0215_advertises_mixed_stun_and_authenticated_turn() -> None:
-    config = (E2E / "ejabberd.yml").read_text(encoding="utf-8")
-    authority = config[config.index("  mod_stun_disco:") : config.index("  mod_cynapsa_mesh:")]
+    config = dedicated_ejabberd_file("test/sdk-e2e/legacy.yml")
+    authority = config[config.index("  mod_stun_disco:") : config.index("  mod_shared_roster:")]
     assert 'host: "10.240.90.2"' in authority
     assert "restricted: true" in authority
     assert "type: turn" in authority
@@ -899,7 +870,7 @@ def test_response_delay_uses_one_fifo_for_the_complete_xmpp_flow() -> None:
     active_dispatch = fault_runner.index(
         'timeline "$client active $target rpc observed"'
     )
-    expiry_baseline = fault_runner.index("expired_before=$(ejabberd_resume_expiry_count")
+    expiry_baseline = fault_runner.index("expired_before=$(ejabberd_log_count")
     blackhole_install = fault_runner.index(
         'blackhole_service "$fault_service" "$fault_label"'
     )
@@ -1037,10 +1008,44 @@ def test_result_verifier_accepts_exact_80_and_rejects_79(tmp_path: Path) -> None
     assert summary["servers"]["native"]["dispatches"] == 40
     assert summary["servers"]["monkey"]["dispatches"] == 40
 
+    hop_command = [*command[:2], "--require-hop", *command[2:]]
+    assert subprocess.run(hop_command, capture_output=True, text=True).returncode != 0
+    hop_checks = ["/forward", "/remap", "/unhandled"]
+    for client, path in zip(clients, paths):
+        if client in {"native-sync", "monkey-sync"}:
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    "E2E_HOP_RESULT="
+                    + json.dumps({"client": client, "checks": hop_checks})
+                    + "\n"
+                )
+    native_log = Path(command[command.index("--native-server-log") + 1])
+    monkey_log = Path(command[command.index("--monkey-server-log") + 1])
+    for log, records in (
+        (native_log, [{"event": "hop-intermediate", "path": path} for path in hop_checks * 2]),
+        (monkey_log, [{"event": "hop-upstream", "body": "hop-probe"} for _ in range(6)]),
+    ):
+        with log.open("a", encoding="utf-8") as stream:
+            for record in records:
+                stream.write("E2E_DIAGNOSTIC=" + json.dumps(record) + "\n")
+    assert subprocess.run(hop_command, capture_output=True, text=True).returncode == 0
+
     lines = paths[0].read_text().splitlines()
-    failing = json.loads(lines[-1].removeprefix("E2E_RESULT="))
+    lines[1] += 'CYNAPSA_CORE_EVIDENCE {"event":"rank2_inbound_disposition"}'
+    paths[0].write_text("\n".join([*lines, ""]), encoding="utf-8")
+    interleaved = subprocess.run(command, check=True, capture_output=True, text=True)
+    assert json.loads(interleaved.stdout)["passed"] == 80
+
+    lines[1] += "junk"
+    paths[0].write_text("\n".join([*lines, ""]), encoding="utf-8")
+    malformed = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert malformed.returncode != 0
+    lines[1] = lines[1].removesuffix("junk")
+
+    report_index = next(index for index, line in enumerate(lines) if line.startswith("E2E_RESULT="))
+    failing = json.loads(lines[report_index].removeprefix("E2E_RESULT="))
     failing.update(passed=19, failed=1, failures=["synthetic"])
-    lines[-1] = f"E2E_RESULT={json.dumps(failing)}"
+    lines[report_index] = f"E2E_RESULT={json.dumps(failing)}"
     paths[0].write_text("\n".join([*lines, ""]), encoding="utf-8")
     rejected = subprocess.run(command, check=False, capture_output=True, text=True)
     assert rejected.returncode != 0

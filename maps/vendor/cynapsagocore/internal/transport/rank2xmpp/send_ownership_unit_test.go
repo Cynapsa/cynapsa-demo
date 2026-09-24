@@ -10,7 +10,39 @@ import (
 	"github.com/Cynapsa/cynapsagocore/internal/outbox"
 	"github.com/Cynapsa/cynapsagocore/internal/protocol"
 	"github.com/Cynapsa/cynapsagocore/internal/transport"
+	"mellium.im/xmpp"
 )
+
+func TestCancelledMelliumSendBeforeWriteDoesNotInterruptSharedStream(t *testing.T) {
+	session := newMelliumSession(MelliumConfig{}, Endpoint{})
+	session.mu.Lock()
+	session.session = new(xmpp.Session)
+	session.management = &StreamManagement{}
+	session.writeGate = make(chan struct{}, 1) // another writer owns the gate
+	session.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sendSession(session, ctx, Stanza{Kind: StanzaSignal}) }()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("send error=%v; want context cancellation", err)
+		}
+		var staged *wireError
+		if !errors.As(err, &staged) || staged.stage != wireNotStarted {
+			t.Fatalf("send error=%v; want pre-wire stage", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled send stayed blocked on the write gate")
+	}
+	session.mu.Lock()
+	suspended := session.suspended
+	session.mu.Unlock()
+	if suspended {
+		t.Fatal("pre-wire cancellation interrupted the shared stream")
+	}
+}
 
 type ownershipSession struct {
 	*fakeSession

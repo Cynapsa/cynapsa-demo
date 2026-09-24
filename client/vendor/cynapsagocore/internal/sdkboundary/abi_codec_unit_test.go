@@ -14,6 +14,26 @@ import (
 	"github.com/Cynapsa/cynapsagocore/internal/model"
 )
 
+func TestWirePayloadEmptyBodiesRemainCanonicalBase64(t *testing.T) {
+	for _, payload := range []v1.Payload{
+		{Value: v1.NativePayload{Path: "/empty"}},
+		{Value: v1.HTTPRequestPayload{Method: "GET", Path: "/empty"}},
+		{Value: v1.HTTPResponsePayload{StatusCode: 204, Reason: "No Content"}},
+	} {
+		wire, err := wirePayload(payload)
+		if err != nil {
+			t.Fatalf("encode payload: %v", err)
+		}
+		encoded, err := json.Marshal(wire)
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		if !bytes.Contains(encoded, []byte(`"body":""`)) {
+			t.Fatalf("empty body must be base64 text, got %s", encoded)
+		}
+	}
+}
+
 func TestDecodeABIConfigUsesOnlyLocalLimits(t *testing.T) {
 	adapter, _ := New()
 	config, err := adapter.DecodeABIConfig([]byte(`{"abi_version":1,"command_timeout_ms":1000,"rpc_timeout_ms":2000,"queue_limit":32,"payload_limit":4096}`))

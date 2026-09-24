@@ -6,18 +6,18 @@ Status: current
   expiry, message-ID deduplication, and the bounded process-memory outbox.
 - Core attempts Rank 1, then Rank 2 fallback, while retaining one message ID.
 - The outbox survives XMPP session replacement but not process restart.
-- Current membership is a complete server snapshot and has no membership
-  lease.
-- The exact-resource mailbox is independent of any XEP-0198 session identifier
-  and is purged when its sender or recipient resource is removed.
+- First contact uses a server-authorized Cynapsa peer handshake; no complete
+  mesh-member snapshot is downloaded or used for local admission.
+- The dedicated server currently has no per-installation offline mailbox.
+  XEP-0198 may replay during the 30-second resume window; an unacknowledged
+  stanza may be lost after final session expiry.
 - A fresh Rank 2 session requires TLS, SASL, exact-resource bind, XEP-0198,
-  authority-feature discovery, server time, and a complete snapshot.
-- A successful resume uses fresh TLS and SASL, skips bind, feature discovery,
-  and snapshot download, waits for exact `resume-authority: ready`, completes
-  retained transport replay, and then recalibrates server time before live
-  publication.
-- A failed resume performs the complete fresh-session setup.
-- A dedicated bounded control lane commits each exact correlated IQ before its
-  processed acknowledgement; failure closes the session.
+  and server-time calibration; peers start closed.
+- A successful resume keeps the server session but Core reauthorizes peers
+  before releasing their work. A failed resume makes a clean bind. The server
+  revokes an expired installation after a 30-second resume window.
+- A dedicated bounded control lane action-ACKs revokes after peer cleanup.
+  Both sides probe idle connections every 10 seconds with a 10-second
+  response deadline.
 - Transport uncertainty remains private. RPC ends with `rpc_timeout`; `msg`
   has no later application signal.

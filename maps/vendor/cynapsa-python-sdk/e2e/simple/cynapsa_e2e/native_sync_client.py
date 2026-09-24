@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
 
 import cynapsa
@@ -23,6 +25,33 @@ def main() -> int:
                 expect(response.json(), text, tag)
 
             passed = run_sync_target("native-sync", tag, check, passed, failures)
+        if os.environ.get("E2E_HOP_CHECK") == "1":
+            hop_checks: list[str] = []
+            for path, expected_status in (
+            ("/forward", 429), ("/remap", 503), ("/unhandled", 500)
+            ):
+                try:
+                    session.request(NATIVE_SERVER, cynapsa.CynapsaRequest("GET", path))
+                    raise AssertionError(f"{path} unexpectedly succeeded")
+                except cynapsa.RemoteNativeError as error:
+                    response = error.response
+                    assert response.status_code == expected_status, (path, response)
+                    if path == "/forward":
+                        assert response.json() == {"error": "quota exceeded"}
+                        assert ("retry-after", "7") in response.headers
+                        assert ("x-upstream", "maps") in response.headers
+                    elif path == "/remap":
+                        assert error.code == "upstream_limited"
+                        assert response.error is not None
+                        assert response.error.detail == "Map service is busy"
+                    else:
+                        assert error.code == "handler_error"
+                        assert b"quota exceeded" not in response.body
+                    hop_checks.append(path)
+            print(
+                "E2E_HOP_RESULT=" + json.dumps({"client": "native-sync", "checks": hop_checks}),
+                flush=True,
+            )
     return result("native-sync", passed, failures)
 
 

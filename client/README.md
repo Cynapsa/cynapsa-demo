@@ -1,7 +1,8 @@
 # Demo client
 
-This directory is an independently runnable interactive client for the deployed
-Cynapsa demo. Docker is the only runtime prerequisite. This directory contains
+This directory is an independently runnable interactive client for the local
+Cynapsa demo. Start the maps and orchestrator containers first; their GCP
+worker pools are disabled. Docker is the only runtime prerequisite. This directory contains
 the application plus the complete Python SDK and Go Core source needed to build
 its container.
 

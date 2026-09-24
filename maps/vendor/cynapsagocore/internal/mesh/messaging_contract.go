@@ -260,10 +260,13 @@ type MessagingDependencies struct {
 	Identity      SessionIdentity
 	Topology      AuthoritativeGroupSource
 	PeerAuthority PeerAuthoritySource
-	Carrier       EnvelopeCarrier
-	Payloads      PayloadPipelineFactory
-	Deliveries    DeliverySink
-	Policies      *PolicyController
-	Handlers      *HandlerRegistry
-	Outbox        *outbox.Outbox
+	// PeerResolver performs one authenticated server handshake for a bare peer.
+	// It is mutually exclusive with the legacy complete-membership sources.
+	PeerResolver PeerResolver
+	Carrier      EnvelopeCarrier
+	Payloads     PayloadPipelineFactory
+	Deliveries   DeliverySink
+	Policies     *PolicyController
+	Handlers     *HandlerRegistry
+	Outbox       *outbox.Outbox
 }

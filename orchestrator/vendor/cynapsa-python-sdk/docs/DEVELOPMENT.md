@@ -84,13 +84,12 @@ patches the ASGI `FastAPI.__call__` lifespan path before user code, attaches
 exactly one root app through `hook_asgi(app)` from the running loop, and
 restores the patch transactionally.
 
-CLI application-policy override remains explicit. Parse repeated `--allow
-AGENT PATH` values before login, translate only literal `*` values to Core's
-empty selectors, and issue one `policy.set` containing exactly those allow
-rules before running user code. Do not install policy when no rules were
-provided; Core currently retains its temporary wildcard-allow default. Policy
-failure must enter the ordinary bridge-cleanup path without executing the
-target.
+CLI application-policy bootstrap is explicit and fail-closed. Parse repeated
+`--allow AGENT PATH` values before login, translate only literal `*` values to
+Core's empty selectors, and issue one `policy.set` containing exactly those
+allow rules before running user code. Do not install policy when no rules were
+provided. Policy failure must enter the ordinary bridge-cleanup path without
+executing the target.
 
 Native routing is exact except for the literal `"*"` wildcard. Keep
 `session.on(path, handler=None)` synchronized across sync and async Sessions.
@@ -167,17 +166,16 @@ The AST regression parses every Python file with Python 3.10 grammar. CI runs
 the unit suite on Python 3.10-3.14 and runs HTTP adapter, package install, and
 pinned native-core jobs separately.
 
-The repository's deep harness runs real Python applications, Core processes,
-ejabberd, STUN, TURN, isolated VLANs, and environment-only failures:
+The current peer-authority harness runs real Python applications, Core
+processes, the dedicated ejabberd image, STUN, TURN, and isolated VLANs:
 
 ```console
-./e2e/simple/run.sh
+./e2e/simple/run-peer-authority.sh
 ```
 
-Its current long-outage campaigns require fresh authentication and a new
-snapshot after XEP-0198 expiration. Short successful-resume campaigns and the
-negotiated authority/control protocol remain follow-up work and must not be
-claimed by release documents until implemented and verified.
+The historical `run.sh` deep-fault campaign is not a current release gate.
+Both runners require the dedicated ejabberd checkout; the SDK does not own a
+server image or server configuration.
 
 For a real native run, set `CYNAPSA_CORE_SMOKE_LIBRARY` to the release-style
 shared library. The guarded tests exercise create/start/init, polling,

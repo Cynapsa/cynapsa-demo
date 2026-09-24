@@ -92,10 +92,7 @@ func newCoreWithConnectivityEnrollmentAndState(config Config, boundary *sdkbound
 		payloads.Close()
 		return nil, boundary.MapFailure(err, sdkboundary.FailureCommand)
 	}
-	// Mesh membership is the communication authorization boundary. Keep the
-	// application-policy command available for compatibility, but start with a
-	// wildcard allow rule so registered SDK/ASGI routes can perform dispatch.
-	policies, err := mesh.NewPolicyController([]model.PolicyRule{{Action: "allow"}})
+	policies, err := mesh.NewPolicyController(nil)
 	if err != nil {
 		payloads.Close()
 		return nil, boundary.MapFailure(err, sdkboundary.FailureCommand)

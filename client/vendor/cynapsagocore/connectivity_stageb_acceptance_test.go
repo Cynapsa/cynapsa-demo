@@ -24,16 +24,21 @@ func (dialer qaStageBEndpointDialer) Dial(context.Context) (rank2xmpp.Session, e
 }
 
 type qaStageBEndpointSession struct {
-	mu       sync.Mutex
-	failAt   string
-	username string
-	phases   []string
-	group    rank2xmpp.AuthoritySnapshot
-	groupErr error
-	sent     []rank2xmpp.Stanza
-	events   chan rank2xmpp.Event
-	closed   chan struct{}
-	once     sync.Once
+	mu           sync.Mutex
+	failAt       string
+	username     string
+	phases       []string
+	group        rank2xmpp.AuthoritySnapshot
+	groupErr     error
+	peers        map[string]rank2xmpp.AuthorizedPeer
+	peerErr      map[string]error
+	bareQueries  []string
+	exactQueries []string
+	acknowledged []string
+	sent         []rank2xmpp.Stanza
+	events       chan rank2xmpp.Event
+	closed       chan struct{}
+	once         sync.Once
 }
 
 func newQAStageBEndpointSession(failAt string) *qaStageBEndpointSession {
@@ -42,9 +47,71 @@ func newQAStageBEndpointSession(failAt string) *qaStageBEndpointSession {
 		group: rank2xmpp.AuthoritySnapshot{Members: []string{
 			"agent@example.test/mesh-one", "peer@example.test/mesh-one",
 		}},
-		events: make(chan rank2xmpp.Event, 8),
-		closed: make(chan struct{}),
+		peers: map[string]rank2xmpp.AuthorizedPeer{
+			"peer@example.test":   {FullJID: "peer@example.test/r2.install-peer.nonce-1", InstallationID: "install-peer", SessionGeneration: "session-1"},
+			"peer-b@example.test": {FullJID: "peer-b@example.test/r2.install-peer-b.nonce-1", InstallationID: "install-peer-b", SessionGeneration: "session-1"},
+		},
+		peerErr: make(map[string]error),
+		events:  make(chan rank2xmpp.Event, 8),
+		closed:  make(chan struct{}),
 	}
+}
+
+func (session *qaStageBEndpointSession) ResolveAuthorizedPeer(ctx context.Context, bare string) (rank2xmpp.AuthorizedPeer, error) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.bareQueries = append(session.bareQueries, bare)
+	if err := session.peerErr[bare]; err != nil {
+		return rank2xmpp.AuthorizedPeer{}, err
+	}
+	peer, ok := session.peers[bare]
+	if !ok {
+		return rank2xmpp.AuthorizedPeer{}, rank2xmpp.ErrUnavailable
+	}
+	return peer, nil
+}
+
+func (session *qaStageBEndpointSession) ResolveAuthorizedExactPeer(ctx context.Context, full string) (rank2xmpp.AuthorizedPeer, error) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.exactQueries = append(session.exactQueries, full)
+	for bare, peer := range session.peers {
+		if peer.FullJID == full {
+			if err := session.peerErr[bare]; err != nil {
+				return rank2xmpp.AuthorizedPeer{}, err
+			}
+			return peer, nil
+		}
+	}
+	return rank2xmpp.AuthorizedPeer{}, rank2xmpp.ErrUnavailable
+}
+
+func (session *qaStageBEndpointSession) AcknowledgePeerRevocation(_ context.Context, id string, _ uint64) error {
+	session.mu.Lock()
+	session.acknowledged = append(session.acknowledged, id)
+	session.mu.Unlock()
+	return nil
+}
+
+func (session *qaStageBEndpointSession) setPeer(bare string, peer rank2xmpp.AuthorizedPeer, err error) {
+	session.mu.Lock()
+	if peer.FullJID == "" {
+		delete(session.peers, bare)
+	} else {
+		session.peers[bare] = peer
+	}
+	if err == nil {
+		delete(session.peerErr, bare)
+	} else {
+		session.peerErr[bare] = err
+	}
+	session.mu.Unlock()
+}
+
+func (session *qaStageBEndpointSession) peerQuerySnapshot() (bare, exact, acknowledged []string) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return append([]string(nil), session.bareQueries...), append([]string(nil), session.exactQueries...), append([]string(nil), session.acknowledged...)
 }
 
 func (session *qaStageBEndpointSession) phase(name string) error {
@@ -241,7 +308,7 @@ func TestStageBAcceptanceBuiltInConnectivityReachesBothAuthenticationPersonaliti
 			if err != nil || status.Lifecycle != v1.LifecycleReady || status.Connectivity != v1.ConnectivityAvailable || status.Personality != test.personality || status.AgentID != "agent@example.test" || status.MeshID != "mesh-one" || status.MeshEndpoint != "mesh.example.test:5222" {
 				t.Fatalf("Status = %#v, %v", status, err)
 			}
-			if phases := session.observedPhases(); !reflect.DeepEqual(phases, []string{"tls", "sasl", "bind", "sm", "discovery", "time", "topology"}) {
+			if phases := session.observedPhases(); !reflect.DeepEqual(phases, []string{"tls", "sasl", "bind", "sm", "time"}) {
 				t.Fatalf("establishment phases = %v", phases)
 			}
 			qaStageBCloseCore(t, core)
@@ -263,9 +330,7 @@ func TestStageBAcceptanceBuiltInConnectivityClassifiesEveryEstablishmentFailure(
 		{phase: "sasl", wantCode: v1.ErrorCodeAuthenticationFailed, wantStage: v1.ErrorStageAuth, wantPhases: []string{"tls", "sasl"}},
 		{phase: "bind", wantCode: v1.ErrorCodeAuthenticationFailed, wantStage: v1.ErrorStageAuth, wantPhases: []string{"tls", "sasl", "bind"}},
 		{phase: "sm", wantCode: v1.ErrorCodeConnectivityUnavailable, wantStage: v1.ErrorStageAuth, retryable: true, wantPhases: []string{"tls", "sasl", "bind", "sm"}},
-		{phase: "discovery", wantCode: v1.ErrorCodeConnectivityUnavailable, wantStage: v1.ErrorStageAuth, retryable: true, wantPhases: []string{"tls", "sasl", "bind", "sm", "discovery"}},
-		{phase: "time", wantCode: v1.ErrorCodeConnectivityUnavailable, wantStage: v1.ErrorStageAuth, retryable: true, wantPhases: []string{"tls", "sasl", "bind", "sm", "discovery", "time"}},
-		{phase: "topology", wantCode: v1.ErrorCodeConnectivityUnavailable, wantStage: v1.ErrorStageAuth, retryable: true, wantPhases: []string{"tls", "sasl", "bind", "sm", "discovery", "time", "topology"}},
+		{phase: "time", wantCode: v1.ErrorCodeConnectivityUnavailable, wantStage: v1.ErrorStageAuth, retryable: true, wantPhases: []string{"tls", "sasl", "bind", "sm", "time"}},
 	}
 	for _, commandName := range []v1.CommandName{v1.CommandAuthLogin, v1.CommandAuthConnect} {
 		for _, test := range tests {

@@ -94,14 +94,23 @@ sender, and message ID.
 Public Core errors use stable codes and boundary-owned messages with no raw cause.
 Malformed destination identities are generic command validation failures and
 map to `command_error`; they are not authorization evidence. A syntactically
-valid destination that is absent from the current authorized membership
-snapshot maps to `authorization_rejected`.
-An operation denied by the Core's current local membership or application
+valid destination denied by the server's peer handshake maps to
+`authorization_rejected`. A target with no active authorized session maps
+to the existing retryable unavailable category before acceptance.
+An operation denied by the server's mesh membership or application
 policy returns the non-retryable local error `authorization_rejected` at the
 `policy` stage. Generic command validation and state rejection remain
 `command_error`; the two outcomes are not inferred from private error text.
-Valid remote application 4xx/5xx results remain canonical responses and never
-become Core errors. Native callers may explicitly call `raise_for_error()`.
+Valid remote application 4xx/5xx results remain canonical on the wire and never
+become Core errors. At a native `session.request()` caller, the SDK projects
+them into `RemoteNativeError` (a `NativeError` retaining a dependency-free
+`CynapsaResponse` in `.response`, not an HTTP-library object). Intermediaries
+forward it only when their handler explicitly returns that canonical response;
+unhandled exceptions produce a sanitized `500 handler_error`. HTTP hooks
+project errors according to the intercepted library's behavior.
+An intermediary that forwards a response must deliberately account for the
+trust boundary: strip sensitive and hop-by-hop headers and private body
+details, or replace the upstream response with a sanitized canonical one.
 Transport uncertainty remains private and may only gain private operator
 telemetry in the future. A successful send means Core accepted ownership, not
 that a remote handler ran.

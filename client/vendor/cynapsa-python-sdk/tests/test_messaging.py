@@ -15,7 +15,7 @@ import pytest
 
 import cynapsa
 from cynapsa import session as session_module
-from cynapsa.exceptions import NativeError
+from cynapsa.exceptions import NativeError, RemoteNativeError
 from cynapsa.native.abi import CYNAPSA_CALLBACK_V1_COMPLETION
 from cynapsa.native.command import (
     MAX_INLINE_PAYLOAD_BYTES,
@@ -516,7 +516,7 @@ def test_request_returns_canonical_application_response_and_maps_ttl(
         driver.stop()
 
 
-def test_remote_application_error_is_a_response_and_local_authorization_is_an_exception(
+def test_remote_application_error_is_native_and_local_authorization_is_distinct(
     fake_library: FakeLibrary, native_factory: None
 ) -> None:
     application_response = {
@@ -543,14 +543,21 @@ def test_remote_application_error_is_a_response_and_local_authorization_is_an_ex
         overrides={"message.request": ("response", application_response)},
     )
     try:
-        response = session.request("agent-b@example.test", "request")
-        assert response.status_code == 403
-        assert response.headers == (
+        with pytest.raises(RemoteNativeError) as remote:
+            session.request("agent-b@example.test", "request")
+        assert remote.value.code == "forbidden"
+        assert remote.value.message == "Access denied"
+        assert remote.value.details == {"safe": True}
+        assert type(remote.value.response) is cynapsa.CynapsaResponse
+        assert remote.value.response.status_code == 403
+        assert remote.value.response.headers == (
             ("x-cynapsa-error", "ordinary application header"),
         )
-        assert response.error == cynapsa.CynapsaApplicationError(
+        assert remote.value.response.body == b'{"denied":true}'
+        assert remote.value.response.error == cynapsa.CynapsaApplicationError(
             "forbidden", "Access denied", {"safe": True}
         )
+        assert not hasattr(remote.value, "status_code")
 
         authorization = {
             "abi_version": 1,
@@ -577,6 +584,74 @@ def test_remote_application_error_is_a_response_and_local_authorization_is_an_ex
         }
     finally:
         session.close()
+        driver.stop()
+
+
+@pytest.mark.parametrize("status, expected_code", [(404, "not_found"), (500, "remote_error")])
+def test_native_request_projects_plain_remote_http_failure(
+    fake_library: FakeLibrary, native_factory: None, status: int, expected_code: str
+) -> None:
+    failure_response = {
+        **RESPONSE_RESULT,
+        "payload": {
+            "http_response": {
+                "status_code": status,
+                "reason": "Not Found" if status == 404 else "Server Error",
+                "headers": [],
+                "body": "",
+            }
+        },
+    }
+    session, driver = _connect(
+        fake_library,
+        native_factory,
+        overrides={"message.request": ("response", failure_response)},
+    )
+    try:
+        with pytest.raises(RemoteNativeError) as raised:
+            session.request("agent-b@example.test", "request")
+        assert raised.value.code == expected_code
+        assert raised.value.response.status_code == status
+        assert raised.value.response.error is None
+        assert not hasattr(raised.value, "status_code")
+    finally:
+        session.close()
+        driver.stop()
+
+
+@pytest.mark.asyncio
+async def test_async_native_request_projects_remote_404(
+    fake_library: FakeLibrary, native_factory: None
+) -> None:
+    failure_response = {
+        **RESPONSE_RESULT,
+        "payload": {
+            "http_response": {
+                "status_code": 404,
+                "reason": "Not Found",
+                "headers": [],
+                "body": "",
+                "error": {
+                    "code": "not_found",
+                    "detail": "No application handler exists for this path",
+                    "details_json": "{}",
+                },
+            }
+        },
+    }
+    driver = CompletionDriver(fake_library)
+    driver.overrides["message.request"] = ("response", failure_response)
+    driver.start()
+    session = await cynapsa.connect_async(**AUTH)
+    try:
+        with pytest.raises(RemoteNativeError) as raised:
+            await session.request("agent-b@example.test", "request")
+        assert raised.value.code == "not_found"
+        assert raised.value.message == "No application handler exists for this path"
+        assert raised.value.response.status_code == 404
+        assert raised.value.response.error is not None
+    finally:
+        await session.close()
         driver.stop()
 
 

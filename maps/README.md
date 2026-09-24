@@ -20,7 +20,10 @@ image. Encrypted Cynapsa state persists in the `cynapsa-demo-maps-state` Docker
 volume. Remove `CYNAPSA_TOKEN` from `.env` after enrollment; both API keys are
 required on every run. `DEMO_MESH_ID` is also required on every run.
 
-Use `./run.sh --build` to force a rebuild from this directory.
+Use `./run.sh --build` to force a rebuild from this directory. The image takes
+`CYNAPSA_TOKEN` at container startup from the ignored `.env` or shell
+environment only when its state volume has no saved profile. No token is baked
+into the Dockerfile or image.
 
 ## Test another identity
 
@@ -30,6 +33,7 @@ CYNAPSA_TOKEN='another-enrollment-token' \
   ./run.sh
 ```
 
-The deployed Cloud Run worker pool is named `cynapsa-demo-maps` in project
-`aztm-amesh`, region `us-central1`. Its secrets and state are supplied through
-Secret Manager and are not committed here.
+The Cloud Run worker pool `cynapsa-demo-maps` is disabled at zero instances.
+For this branch, run this directory locally with a fresh enrollment token and
+an empty state volume. Do not reuse a token consumed by the former cloud
+installation.

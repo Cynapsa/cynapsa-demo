@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 
@@ -66,6 +67,27 @@ def main() -> int:
                     error_type=type(exc).__name__,
                     error=str(exc),
                 )
+    if os.environ.get("E2E_HOP_CHECK") == "1":
+        hop_checks: list[str] = []
+        for path, expected_status in (
+        ("/forward", 429), ("/remap", 503), ("/unhandled", 500)
+        ):
+            response = requests.get("https://native-server.test" + path, timeout=30)
+            assert type(response) is requests.Response
+            assert response.status_code == expected_status, (path, response.status_code)
+            if path == "/forward":
+                assert response.json() == {"error": "quota exceeded"}
+                assert response.headers["retry-after"] == "7"
+                assert response.headers["x-upstream"] == "maps"
+            elif path == "/remap":
+                assert response.json()["error"]["code"] == "upstream_limited"
+            else:
+                assert "quota exceeded" not in response.text
+            hop_checks.append(path)
+        print(
+            "E2E_HOP_RESULT=" + json.dumps({"client": "monkey-sync", "checks": hop_checks}),
+            flush=True,
+        )
     report = {
         "client": "monkey-sync",
         "passed": passed,

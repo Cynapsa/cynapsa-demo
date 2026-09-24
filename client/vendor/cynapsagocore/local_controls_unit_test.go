@@ -163,13 +163,6 @@ func TestPublicLocalHandlerAndPolicyControlsShareCanonicalState(t *testing.T) {
 	core := newStartedLocalControlCore(t, 4)
 	defer destroyLocalControlCore(t, core)
 
-	initial := requireLocalCompletion(t, core, v1.PolicyGetCommand{CommandBase: localCommandBase("policy-get-initial")})
-	initialPolicy, ok := initial.Result.(v1.PolicyResult)
-	wildcardAllow := []v1.PolicyRule{{Action: v1.PolicyActionAllow}}
-	if !ok || !reflect.DeepEqual(initialPolicy.Rules, wildcardAllow) {
-		t.Fatalf("initial policy = %#v, want wildcard allow", initial.Result)
-	}
-
 	register := func(id string) {
 		requireLocalCompletion(t, core, v1.HandlerRegisterCommand{CommandBase: localCommandBase(id), Path: "/orders/create"})
 	}

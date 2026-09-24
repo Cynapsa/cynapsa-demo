@@ -1,0 +1,417 @@
+{
+  "schema_version": 1,
+  "status": "PINNED",
+  "publication_state": "implementation_candidate",
+  "implementation_allowed": true,
+  "production_requires": "qualified_release",
+  "design_repository": "https://github.com/Cynapsa/CynapsaGuardDesign.git",
+  "design_commit": "919853b6c640ad18db18f0394cd153057817721e",
+  "release_manifest_sha256": "85c4f3ebbaa9316cb1357655fe19fe9882556a683a05c6a9a69a73de43a86987",
+  "contract_release": "guard-contracts-0.4.0-candidate.1",
+  "contract_versions": {
+    "contract_release": "guard-contracts-0.4.0-candidate.1",
+    "guard_public_api": "g1",
+    "provider_contract": "provider-v1",
+    "authority_contract": "authority-v1",
+    "bootstrap_contract": "guard-bootstrap-v1",
+    "g1_auth": "g1-rs256-v1",
+    "policy_semantics": "policy-semantics-v1",
+    "crypto_profile": "logical-v2-wire-v3-ms1-ga1"
+  },
+  "requirements": [],
+  "artifacts": [
+    {
+      "path": "contracts/openapi.yaml",
+      "sha256": "bb820e7f1b39e969c81d5590d2bab3f890622ed4b14c6f2622bb9f30eb3d6733"
+    },
+    {
+      "path": "contracts/error.schema.json",
+      "sha256": "555aa4b0fed776aa04bfbd2bc5b3c32c2105ce28042b8fc26aabbb11a93ebd9f"
+    },
+    {
+      "path": "contracts/evaluation-request.schema.json",
+      "sha256": "27eba15f666182cce5395186d5cf4e7548b53e9d9e4699b41773737362a00e3c"
+    },
+    {
+      "path": "contracts/evaluation-response.schema.json",
+      "sha256": "61e5d4e6ba194d66e6e8b1198a9b4682e0cfaee326bec7be32798ed66f86f903"
+    },
+    {
+      "path": "contracts/evaluation-plan.schema.json",
+      "sha256": "60e963fcf5911c5e35c6c7736ea6f56fcd39033f905df6839f1492c9b6b59482"
+    },
+    {
+      "path": "contracts/sender-proof.schema.json",
+      "sha256": "91c0ddc1948ea17517d4a66c1b09365c8238f48bafb92b1b71c6f29005d2e9d8"
+    },
+    {
+      "path": "contracts/guard-attestation-claims.schema.json",
+      "sha256": "276a689028dd8dcbd48cb5604309a6aee2cbe3e6005da0adbb780b9f56ddbc14"
+    },
+    {
+      "path": "contracts/guard-session.schema.json",
+      "sha256": "8e5e7194958b3ae92e64ebd4223a8a98f4e882939b1c96027ede1c56551239d2"
+    },
+    {
+      "path": "contracts/guard-lease-request.schema.json",
+      "sha256": "dd0cbd196606458dc504426b63d70db04171c22ac89ac65c4b72f45d0b75959f"
+    },
+    {
+      "path": "contracts/guard-lease-response.schema.json",
+      "sha256": "ef54eb9a0338249ee1ea764bad986c0db931b9c930f6c87b42838713e624cd9d"
+    },
+    {
+      "path": "contracts/crypto/jws-header.schema.json",
+      "sha256": "5e9fd4a21712ae358f8ad819697491f35dccac62eeb70e50f81ceec354edda2c"
+    },
+    {
+      "path": "contracts/provider/openapi.yaml",
+      "sha256": "6eff526159672d2271ce728616232ce48d8e79402cca254ce784fd2b9d4eddff"
+    },
+    {
+      "path": "contracts/provider/request.schema.json",
+      "sha256": "30860311c7255c271b8d5af684d7ac36addb7394594465c1453626e0b7569252"
+    },
+    {
+      "path": "contracts/provider/result.schema.json",
+      "sha256": "f088eb9d1b7d7f45b0a03fd9a8c4939ff913f0f334557706df75a2d7c30d0acf"
+    },
+    {
+      "path": "contracts/provider/capabilities.schema.json",
+      "sha256": "e39f68def972d593898d6cecce3515a6809b488847388f24e95175b5ad07d9a5"
+    },
+    {
+      "path": "contracts/policy/profile.schema.json",
+      "sha256": "dad9cf6ccd23a6051d2de832600d20d15437127171a4c700debcf005065c0140"
+    },
+    {
+      "path": "contracts/policy/catalog.schema.json",
+      "sha256": "c532064e78b23b8c11b0426a3ca0343188d3f81fefc680a9ea8c182bb22736d4"
+    },
+    {
+      "path": "contracts/auth/g1-protected-header.schema.json",
+      "sha256": "ee3f37c408e86581c3b0916331db5c40733cab5169fbe81fc69051f4b94ff402"
+    },
+    {
+      "path": "contracts/auth/g1-claims.schema.json",
+      "sha256": "6a0d262973a4cf0c7bb0a3e751cddaef3155dd4cc0839562e86bdd2ec667617d"
+    },
+    {
+      "path": "contracts/bootstrap/openapi.yaml",
+      "sha256": "3730e979bb20c05898c0d63c53bddebc0e560f6cc6fbc930c171fa5beeea5d99"
+    },
+    {
+      "path": "contracts/bootstrap/guard-bootstrap-request.schema.json",
+      "sha256": "5ccb6b1951d90a6d2f73efcbb4c9c0cfa15c5a0c2c38aaaea5f03cce972a0368"
+    },
+    {
+      "path": "contracts/bootstrap/guard-bootstrap-response.schema.json",
+      "sha256": "7bd0c79fd77abd22300daba76cfe035c5c435bc2af23841c6f8e43d515763e89"
+    },
+    {
+      "path": "contracts/bootstrap/installation-key-request.schema.json",
+      "sha256": "3031def045c293f85dc4bcc2a67b8d141b4ed849ded7ad12053d60bb15d3bb3d"
+    },
+    {
+      "path": "contracts/bootstrap/installation-key-response.schema.json",
+      "sha256": "5c34eeb8bf946084d9c4952ca062ce7698be65f3e14ab4c96676ea513cb652fb"
+    },
+    {
+      "path": "contracts/bootstrap/operation-pending.schema.json",
+      "sha256": "f7c7c8e757685115774c28040592ff26b41e368ea88c270f3c2fd616b1b3f318"
+    },
+    {
+      "path": "contracts/authority/openapi.yaml",
+      "sha256": "660d6ba285f354f9a61dd785bb98cf6281a64c89bb1931aa07e7f8143052d24c"
+    },
+    {
+      "path": "contracts/authority/snapshot.schema.json",
+      "sha256": "0e26193d35e7435e8fd2056bb11d6ad8248f4d28ff4cfffdf6d5dd6cf4b84512"
+    },
+    {
+      "path": "contracts/authority/lease-operation.schema.json",
+      "sha256": "a8599f865f723d7edf843b9beae4adb766c4da7721a8da4d987e939ae91b99f2"
+    },
+    {
+      "path": "specs/README.md",
+      "sha256": "c1097fea0056e411ef37bbc6fde37297961ac5a1c0fdc74da3922d276b71179a"
+    },
+    {
+      "path": "specs/component-contracts.md",
+      "sha256": "850c44be5579fb8cc7131eb97ea60180848b37031813f81e524b9de4ee508329"
+    },
+    {
+      "path": "specs/runtime-modes-and-dependencies.md",
+      "sha256": "e7141362c992d39ad2827d8c8468b70bb5c9748890cf9ad01f3fc6525fe2f6ec"
+    },
+    {
+      "path": "specs/message-binding-and-evaluation.md",
+      "sha256": "775add0a054e55bb20f6e0640040e5bba794bb7ee0ea278d7c3e54f53e68c979"
+    },
+    {
+      "path": "specs/authority-ha-and-stale-state.md",
+      "sha256": "74a7bc4f5a2a835ac0e97eb3f5872223004842d56008376db39710400f3464da"
+    },
+    {
+      "path": "specs/provider-contract.md",
+      "sha256": "6eb9e18ec5dcbd95e1f738cfa22340edca57735bcb37c8408a462c15e3697681"
+    },
+    {
+      "path": "specs/policy-semantics.md",
+      "sha256": "90577b19dad637b73bb526a04ae8d7422dc5e0cb69550e1d731f24d412c26042"
+    },
+    {
+      "path": "specs/evaluation-state-machine.md",
+      "sha256": "71892808de21b47d10052fc12c02c06e55c723165b6b0bab2f5fe1042635de17"
+    },
+    {
+      "path": "specs/authority-snapshots.md",
+      "sha256": "3d7c1b57d7883a3fd87fcabed0694b50f36d09dfd2fc26268b9d049dc3e1041d"
+    },
+    {
+      "path": "specs/crypto-and-wire-profile.md",
+      "sha256": "eccb0f3b77ebf3628c83297a67dac881f0da213e14ab202afc29b666bdb6f3a1"
+    },
+    {
+      "path": "specs/limits-and-errors.md",
+      "sha256": "09f5a0eddf11d416df32ce27bb132e598acb94c2e77f546a84ab08dbf0bfd12b"
+    },
+    {
+      "path": "specs/guard-bootstrap-and-auth.md",
+      "sha256": "92479aad543e5508a569c1ea3f34a33372731a05941ffadde4ba3d91fb66275c"
+    },
+    {
+      "path": "contracts/vectors/README.md",
+      "sha256": "e67c2064feebee1b40b40a29bc7a2f77e962fd8c00f836770fb208d467d747d9"
+    },
+    {
+      "path": "contracts/vectors/gocore-logical-v2-sender-proof-valid-seed.json",
+      "sha256": "c0133370a5240f50b98a6e278975ef40bd0a809afe97f425e41e63c6e160e3f3"
+    },
+    {
+      "path": "contracts/vectors/guard-attestation-jws-valid-seed.json",
+      "sha256": "e92a8de0614dec21d68b6eeec19f6c840f083d2f2c0cfdeacaf97d5eaa925230"
+    },
+    {
+      "path": "contracts/vectors/policy-semantics-v1.json",
+      "sha256": "85b05f386a2ce51831f8b05dea43021f3b439813eb3cf83a9ab0ff3650a9da88"
+    },
+    {
+      "path": "contracts/vectors/g1-rs256-valid-test-key.json",
+      "sha256": "852ccc94a359bf8ada20f4fda9084bdb6bdbc26ce8ace18357ccead69cfc69ae"
+    },
+    {
+      "path": "contracts/vectors/installation-key-pop-valid-seed.json",
+      "sha256": "51a7af1033424d512b066aead63b7cd340d2e2786a9a8f728c6ac1ede01e94c8"
+    },
+    {
+      "path": "contracts/vectors/bootstrap-operation-fingerprints-v1.json",
+      "sha256": "cbbf20f00c12a75744b5b51e8ff4ce94e7adec27a552cf88b1c9f314062c843a"
+    },
+    {
+      "path": "contracts/examples/README.md",
+      "sha256": "5b8843b7142ea5c041b2bede306764c8759a820e29c327129e1347057ca52a7a"
+    },
+    {
+      "path": "contracts/examples/evaluation-request.json",
+      "sha256": "16c8ad6412f59a12ef4f9ceff3cf16a25b9a18b899634e0595df95c674fc50b6"
+    },
+    {
+      "path": "contracts/examples/evaluation-response.json",
+      "sha256": "6d746006610a5d0c74ad91e2e9e292da74da622bcb8278a01058750a80df2c04"
+    },
+    {
+      "path": "contracts/examples/guard-bootstrap-request.json",
+      "sha256": "8d5b7cbe09017cb4f920050ead4fb0c87e30ac1ee34b83bffc2ab52d1f007b05"
+    },
+    {
+      "path": "contracts/examples/guard-bootstrap-response.json",
+      "sha256": "202a860b0df3cbebd28483fb28ca73b8f7e2afe90c2088913b1b8f221d1cf0a8"
+    },
+    {
+      "path": "contracts/examples/guard-lease-request.json",
+      "sha256": "ee490bb6b79220aab06c11a9db08a33e79214ea1b13a40a05ceaa887ff89b8eb"
+    },
+    {
+      "path": "contracts/examples/guard-lease-response.json",
+      "sha256": "c4efda05f7850cfec47d528aaa622f2f1fbc195805ccf4fbd99f4f6381ea008a"
+    },
+    {
+      "path": "contracts/examples/guard-session.json",
+      "sha256": "2e83510eb0bb2b0fe9d60e5110607890856d2d323014d40486e3aaa14bc4d21f"
+    },
+    {
+      "path": "contracts/examples/installation-key-request.json",
+      "sha256": "6fc675a762a6caebd5eed87149bda6e943920b3a25483e19c8fbebd5d3cebc44"
+    },
+    {
+      "path": "contracts/examples/installation-key-response.json",
+      "sha256": "3044b5d2f462c96b00201c74a2f28b7399c2c200abd2cf0b001f1d98f3fcf4ed"
+    },
+    {
+      "path": "contracts/examples/operation-pending.json",
+      "sha256": "868cba3a4a95c03999c0316b35447b539f811c4bf243ab1c6bad977cb9e27318"
+    },
+    {
+      "path": "docs/21-repository-work-matrix.md",
+      "sha256": "2e7db9584c98c29109b5c5c65e44a632939cb2af28b7535084a9f961687ff7c4"
+    },
+    {
+      "path": "docs/22-contract-publication.md",
+      "sha256": "167edced91a3737e489a906f1cdbfc009afb020373b1d75adc826352f32ac202"
+    },
+    {
+      "path": "docs/23-implementation-handoffs.md",
+      "sha256": "f105cee337e11f53944a9c150b5c597c83b3531495244dcb94b9a26caca3f829"
+    },
+    {
+      "path": "docs/24-acceptance-and-evidence.md",
+      "sha256": "eb525f436ff2bb55592f2983ffb1b824d431862e09f094f45c2c7e2f6796666c"
+    },
+    {
+      "path": "integration-requirements/README.md",
+      "sha256": "41d39354b9a70fc0822b61ea1dba457dee8da0116e8f702133b2f9122bd96b64"
+    },
+    {
+      "path": "integration-requirements/CynapsaGuard/README.md",
+      "sha256": "f88efcb81840e1c422cb2f1d4feae2ef860166e23bf92cbbe4ebc9a723a9d9cf"
+    },
+    {
+      "path": "integration-requirements/CynapsaGuard/acceptance-tests.md",
+      "sha256": "c1e837ed2a5921e487e30f58227cabd7b4720b685de2ea51da8c1c3c2faffb58"
+    },
+    {
+      "path": "integration-requirements/CynapsaGuard/implementation-plan.md",
+      "sha256": "7e5064a4342342d520da398cbe25454e7a931fc3615fc2db979ff3bedaba9d7f"
+    },
+    {
+      "path": "integration-requirements/CynapsaGuardProviderJev/README.md",
+      "sha256": "e0fc08c03be18b4e904c699dc6f03b1ebc0c0ca6301c4e63f20ce7cfc99947c9"
+    },
+    {
+      "path": "integration-requirements/CynapsaGuardProviderJev/acceptance-tests.md",
+      "sha256": "51b872807b8ec95fe5a22ccb37352f7c3635783bf7ed92b6b09c1fc6cea61275"
+    },
+    {
+      "path": "integration-requirements/CynapsaGuardProviderJev/implementation-plan.md",
+      "sha256": "aca4a2d13ea346644abccf9763136ecc9c25abd36c2ba31eebc75ddcffd8f547"
+    },
+    {
+      "path": "integration-requirements/CynapsaTests/README.md",
+      "sha256": "36d88ff171c9d644b26ad9205fbfdbb106296b935377e6c5da072693b60a4cf2"
+    },
+    {
+      "path": "integration-requirements/CynapsaTests/acceptance-tests.md",
+      "sha256": "2b0c53bca3dd53520e7115ec56d95743667869dfd9434aa29fa1c7f274feb651"
+    },
+    {
+      "path": "integration-requirements/CynapsaTests/implementation-plan.md",
+      "sha256": "099a4e23ea4f266fd11b3f684fc1832bf27f2486dba1fbfd11ca28b28c16624f"
+    },
+    {
+      "path": "integration-requirements/Enrollment/README.md",
+      "sha256": "8843d95ecfe3ffd2769eb694b2e37d74ee2faf2ca9c120380c279be5c55debec"
+    },
+    {
+      "path": "integration-requirements/Enrollment/acceptance-tests.md",
+      "sha256": "19be97ec09fc5100dcb15f0d5f83e9b6d28b5ed3425644f6ef280db64d94113c"
+    },
+    {
+      "path": "integration-requirements/Enrollment/implementation-plan.md",
+      "sha256": "df244d3b0bcc20b5a92657dbea2d3e9c4a2581a7e3d611f1f5a8022698146c3f"
+    },
+    {
+      "path": "integration-requirements/aztmmanagment/README.md",
+      "sha256": "c29939abc55317579cafd4f99c03f1c87ea588bd6ab4080c55b5649fd8c117da"
+    },
+    {
+      "path": "integration-requirements/aztmmanagment/acceptance-tests.md",
+      "sha256": "d9d9d28cdefb5bd1bf1406baf4aa6e9500a0046acf4c28247a1290ec2c541486"
+    },
+    {
+      "path": "integration-requirements/aztmmanagment/high-availability.md",
+      "sha256": "c50d4bc3dbeef1a76f1b0d09398892501a0a91f05e28849e872f0bd8bb47a150"
+    },
+    {
+      "path": "integration-requirements/aztmmanagment/implementation-plan.md",
+      "sha256": "7531fdbf79e50fd94325c4c0c71076c1f7e604d65cd7275245c885d5dec8ed42"
+    },
+    {
+      "path": "integration-requirements/cynapsa-python-sdk/README.md",
+      "sha256": "2a2da648012cc110b82496bdd77e97248efe0dca2b2c941a3b648de84eb4d9a9"
+    },
+    {
+      "path": "integration-requirements/cynapsa-python-sdk/acceptance-tests.md",
+      "sha256": "018001dccfb3f3b9acda2d9e83012c82f1b25cf8581624cd004120798ff58545"
+    },
+    {
+      "path": "integration-requirements/cynapsa-python-sdk/implementation-plan.md",
+      "sha256": "2275d4cac3da7dd2b63c5db33a3192fabf54451546c79beac80c74da3e082760"
+    },
+    {
+      "path": "integration-requirements/cynapsa-python/README.md",
+      "sha256": "b57c0bf53c8a7070bb713b4cab8cf39f483e5136be1958264c32b0781e329149"
+    },
+    {
+      "path": "integration-requirements/cynapsa-python/acceptance-tests.md",
+      "sha256": "881df209dc889b00dcb37d933bf4d8c250967085772e5ca4352417393967b546"
+    },
+    {
+      "path": "integration-requirements/cynapsa-python/implementation-plan.md",
+      "sha256": "bf8404ecdbf68962f588d09501b4603cd65fabae36c57295ec26a38adb3dc70d"
+    },
+    {
+      "path": "integration-requirements/cynapsagocore/README.md",
+      "sha256": "bffb299a126471da8c29025f31e156b94cd428f213da67575f3618b0c3c31ca6"
+    },
+    {
+      "path": "integration-requirements/cynapsagocore/acceptance-tests.md",
+      "sha256": "b49ae1b7ecb42ef5304eebd5d7de56e4efd0910c9350a83ea71e1bed06ca3fce"
+    },
+    {
+      "path": "integration-requirements/cynapsagocore/implementation-plan.md",
+      "sha256": "feb4621883958b378b4a7fa13226601fe3791f18d4a5e97d113fa81d0177112d"
+    },
+    {
+      "path": "integration-requirements/ejabberd/README.md",
+      "sha256": "ee16423a14de65e44655103af1e1b64cb874984d38b6103e08c9fa96118b9059"
+    },
+    {
+      "path": "integration-requirements/ejabberd/acceptance-tests.md",
+      "sha256": "26cae9bd1f409cefd913daf5a9353642fdb99319b39618b70539a1ffa61a7d10"
+    },
+    {
+      "path": "integration-requirements/ejabberd/high-availability.md",
+      "sha256": "641e4cb15c7408619c8f143297b7b52812b9aa625dba05f8165980b1052a8e6a"
+    },
+    {
+      "path": "integration-requirements/ejabberd/implementation-plan.md",
+      "sha256": "c2e0b6a2124feb0fafcaed2fcf77526ef7144997fd00a8bb66335692320b42bc"
+    },
+    {
+      "path": "integration-requirements/infrastructure/README.md",
+      "sha256": "0f2614fdc651abe650e397d9a2a3267269110aeb170b295fa2567f64a6b8c707"
+    },
+    {
+      "path": "integration-requirements/infrastructure/acceptance-tests.md",
+      "sha256": "254f95c2ed82a9e3fa2ca1679688ab5c4a91124e8a7e38c44a6a5d0222f5c089"
+    },
+    {
+      "path": "integration-requirements/infrastructure/implementation-plan.md",
+      "sha256": "adba7112503cfd4f9a1889b7b9384fb84026bad8e3bfd6671bfaca1dd948a769"
+    },
+    {
+      "path": "integration-requirements/runtime-issuer-api/README.md",
+      "sha256": "367fbc5f52ed6d615275b57b1da9f17554d7621215e4daa75310e32e33efe3f5"
+    },
+    {
+      "path": "integration-requirements/runtime-issuer-api/acceptance-tests.md",
+      "sha256": "70276ddec351b7081e60ec34aa3e113c315dbb526361874dba7941ea452188cb"
+    },
+    {
+      "path": "integration-requirements/runtime-issuer-api/implementation-plan.md",
+      "sha256": "5e04f4ccfc92d55c2627884d7edf5f7fd344e7a574f9d1634f774b3b62035214"
+    }
+  ],
+  "note": "Pinned to the remotely verified immutable Design implementation candidate. Coding is allowed against this exact pin. Production remains blocked until a separate qualified_release records the coordinated implementation and deployment evidence."
+}

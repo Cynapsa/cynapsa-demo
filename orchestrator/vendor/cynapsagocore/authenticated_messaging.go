@@ -227,7 +227,7 @@ func (factory *authenticatedMessagingFactory) Create(ctx context.Context, build 
 		return nil, sessionkernel.AuthenticatedOperations{}, providerError(sessionkernel.ProviderInternal)
 	}
 	rank1Clock := transport.ClockFunc(func() time.Time { return capabilities.clock.Snapshot().UTC })
-	authority := &rank1MembershipAuthority{client: capabilities.client, live: live, timeout: build.Profile.ReconnectOperationTimeout, meshID: build.Identity.MeshID, localBare: build.Identity.AgentID, localFull: build.Identity.BoundIdentity, blocked: true}
+	authority := &rank1MembershipAuthority{client: capabilities.client, live: live, timeout: build.Profile.ReconnectOperationTimeout, meshID: build.Identity.MeshID, localBare: build.Identity.AgentID, localFull: build.Identity.BoundIdentity, blocked: true, dynamic: true}
 	authority.managerEpoch = live.BlockLiveAuthority()
 	if err := capabilities.client.SetAuthorityFence(authority.Fence); err != nil {
 		return nil, sessionkernel.AuthenticatedOperations{}, providerError(sessionkernel.ProviderInternal)
@@ -274,10 +274,6 @@ func (factory *authenticatedMessagingFactory) Create(ctx context.Context, build 
 	if err != nil {
 		return nil, sessionkernel.AuthenticatedOperations{}, providerError(sessionkernel.ProviderInternal)
 	}
-	topology := &rank2GroupTopologySource{
-		client: capabilities.client, clock: capabilities.clock, meshID: build.Identity.MeshID,
-		localBare: build.Identity.AgentID, localFull: build.Identity.BoundIdentity, rank1: authority,
-	}
 	recovery := &rank1RecoveryController{live: live, refresh: assembly, replace: handshakes, refreshTimeout: max(build.Profile.ReconnectOperationTimeout/2, time.Nanosecond)}
 	carrier := newRankedEnvelopeCarrier(live, recovery, newRank2EnvelopeCarrier(capabilities.client), build.Profile.ReconnectOperationTimeout, build.Profile.ReconnectInitial, rank1Clock)
 	carrier.authority = authority
@@ -288,11 +284,34 @@ func (factory *authenticatedMessagingFactory) Create(ctx context.Context, build 
 		PeerIdleTimeout: build.Profile.ReconnectOperationTimeout, OutboxPollInterval: build.Profile.ReconnectOperationTimeout,
 		Clock: capabilities.clock,
 	}, mesh.MessagingDependencies{
-		Identity: identity, PeerAuthority: topology, Carrier: carrier,
+		Identity: identity, PeerResolver: rank2PeerResolver{client: capabilities.client}, Carrier: carrier,
 		Payloads: pipelineFactory, Deliveries: newRuntimeDeliverySink(factory.runtime), Policies: factory.policies, Handlers: factory.handlers,
 		Outbox: capabilities.client.DeliveryOutbox(),
 	})
 	if err != nil {
+		return nil, sessionkernel.AuthenticatedOperations{}, providerError(sessionkernel.ProviderInternal)
+	}
+	if err := capabilities.client.SetRevocationHandler(func(operation context.Context, notice rank2xmpp.Revocation) error {
+		if operation == nil {
+			return rank2xmpp.ErrInvalidConfig
+		}
+		var failure *mesh.Failure
+		switch notice.Type {
+		case rank2xmpp.RevokeLogical:
+			failure = messaging.RevokeLogical(operation, notice.Peer)
+		case rank2xmpp.RevokeInstallation:
+			failure = messaging.RevokeInstallation(operation, notice.Peer, notice.InstallationID, notice.SessionGeneration)
+		default:
+			return rank2xmpp.ErrProtocol
+		}
+		if failure != nil {
+			return rank2xmpp.ErrUnavailable
+		}
+		return nil
+	}); err != nil {
+		return nil, sessionkernel.AuthenticatedOperations{}, providerError(sessionkernel.ProviderInternal)
+	}
+	if err := capabilities.client.SetRoutingFailureHandler(messaging.ReportServerRoutingFailure); err != nil {
 		return nil, sessionkernel.AuthenticatedOperations{}, providerError(sessionkernel.ProviderInternal)
 	}
 	if err := payloadRuntime.bindMessaging(messaging); err != nil {
@@ -369,6 +388,7 @@ type rank1MembershipAuthority struct {
 	live                         *transport.Manager
 	timeout                      time.Duration
 	meshID, localBare, localFull string
+	dynamic                      bool
 	mu                           sync.Mutex
 	// fenceMu serializes Manager epoch ownership across authority fences. It is
 	// never held while calling into MessagingService.
@@ -468,6 +488,17 @@ func (authority *rank1MembershipAuthority) AuthorizeRank1(ctx context.Context, p
 	if !ready || messaging == nil {
 		return rank2xmpp.ErrUnavailable
 	}
+	if authority.dynamic {
+		// Rank1 must authorize the exact installation it will connect to.
+		// A bare lookup could select another installation while this stale
+		// full peer address still happens to be present in the local cache.
+		if failure := messaging.AuthorizeExactPeer(ctx, peerFull); failure != nil {
+			if failure.Code == mesh.FailureRejected || failure.Code == mesh.FailureAuthorization {
+				return rank2xmpp.ErrAuthentication
+			}
+			return rank2xmpp.ErrUnavailable
+		}
+	}
 	if failure := messaging.AuthorizeCurrentPeer(peerFull); failure != nil {
 		if failure.Code == mesh.FailureRejected || failure.Code == mesh.FailureAuthorization {
 			return rank2xmpp.ErrAuthentication
@@ -489,6 +520,12 @@ func (authority *rank1MembershipAuthority) Fence() {
 // Transport loss alone is not authenticated revocation evidence.
 func (authority *rank1MembershipAuthority) Suspend() bool {
 	if authority == nil || authority.live == nil {
+		return false
+	}
+	// A transport interruption now destroys peer authorization. The client
+	// follows a false suspension with the hard fence before it publishes the
+	// disconnected state; resumption will require fresh peer handshakes.
+	if authority.dynamic {
 		return false
 	}
 	authority.fenceMu.Lock()
@@ -683,6 +720,61 @@ func (authority *rank1MembershipAuthority) DataReady() bool {
 	ready := authority.ready && !authority.blocked && !authority.generationExhausted
 	authority.mu.Unlock()
 	return ready
+}
+
+// openDynamic publishes only the authenticated local session. Peers are
+// admitted individually after a fresh server-authorized Cynapsa handshake;
+// no complete mesh membership vector is queried or installed.
+func (authority *rank1MembershipAuthority) openDynamic(ctx context.Context) error {
+	if authority == nil || !authority.dynamic || authority.client == nil || authority.live == nil || ctx == nil {
+		return rank2xmpp.ErrInvalidConfig
+	}
+	authority.syncMu.Lock()
+	defer authority.syncMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if authority.client.DurableState() != rank2xmpp.DurableLive {
+		return rank2xmpp.ErrUnavailable
+	}
+	authority.mu.Lock()
+	if authority.ready && !authority.blocked && !authority.suspended {
+		authority.mu.Unlock()
+		return nil
+	}
+	messaging, epoch, generation := authority.messaging, authority.managerEpoch, authority.generation
+	authority.mu.Unlock()
+	if messaging == nil || epoch == 0 {
+		return rank2xmpp.ErrUnavailable
+	}
+	if err := messaging.InitializeLocalAuthority(ctx); err != nil {
+		return rank2xmpp.ErrUnavailable
+	}
+	if err := authority.live.ReconcileLiveAuthority(ctx, epoch, nil); err != nil {
+		return rank2xmpp.ErrUnavailable
+	}
+	if err := authority.live.PublishLiveAuthority(epoch); err != nil {
+		return rank2xmpp.ErrUnavailable
+	}
+	if err := messaging.ReauthorizeSuspendedPeers(ctx, authority.client.CurrentBoundIdentity()); err != nil {
+		authority.Fence()
+		return rank2xmpp.ErrUnavailable
+	}
+	liveSession := authority.client.DurableState() == rank2xmpp.DurableLive
+	authority.mu.Lock()
+	current := authority.generation == generation && authority.managerEpoch == epoch && !authority.generationExhausted && liveSession
+	if current {
+		authority.blocked = false
+		authority.ready = true
+		authority.suspended = false
+		authority.signalStateChangedLocked()
+	}
+	authority.mu.Unlock()
+	if !current {
+		authority.Fence()
+		return rank2xmpp.ErrUnavailable
+	}
+	return nil
 }
 
 func (authority *rank1MembershipAuthority) synchronize(ctx context.Context) ([]mesh.Identity, error) {
@@ -1469,6 +1561,12 @@ func (service *authenticatedMessagingService) Start(ctx context.Context) *sessio
 		service.shutdownOnce.Do(service.cleanup)
 		return providerMeshFailure(failure)
 	}
+	if service.rank1.authority != nil && service.rank1.authority.dynamic {
+		if err := service.rank1.authority.openDynamic(ctx); err != nil {
+			service.shutdownOnce.Do(service.cleanup)
+			return classifyConnectivityError(ctx, err)
+		}
+	}
 	if failure := connectivityContextError(ctx); failure != nil {
 		service.shutdownOnce.Do(service.cleanup)
 		return failure
@@ -1501,7 +1599,9 @@ func (service *authenticatedMessagingService) Start(ctx context.Context) *sessio
 			return errors.New("rank1 inbound stopped")
 		}},
 		{name: "rank2-state", run: service.monitorRank2ForRank1},
-		{name: "authority", run: service.monitorAuthorityChanges},
+	}
+	if service.rank1.authority == nil || !service.rank1.authority.dynamic {
+		workers = append(workers, namedMessagingWorker{name: "authority", run: service.monitorAuthorityChanges})
 	}
 	go func() {
 		defer close(done)
@@ -1590,10 +1690,23 @@ func (service *authenticatedMessagingService) monitorRank2ForRank1(ctx context.C
 		authorityChanged, authorityVersion, authorityReady := service.rank1.authority.observeState()
 		state := service.rank1.client.DurableState()
 		if state == rank2xmpp.DurablePending || state == rank2xmpp.DurableUnknown {
-			// The client publishes Pending/Unknown only after synchronously
-			// fencing authority. Repeating that fence here can race a serialized
-			// refresh which has already acknowledged Rank2 but has not yet opened
-			// the peer lanes.
+			if service.rank1.client.TerminalFailure() != nil {
+				service.messaging.FailPendingRequestsOnAuthenticationRejection()
+			}
+			// The transport callback fences admission synchronously. Cleanup is
+			// the slower phase and must fully retire peers before any reconnect
+			// publication can restore application traffic.
+			if service.rank1.authority.dynamic {
+				operation, cancel := context.WithTimeout(ctx, service.rank1.timeout)
+				err := service.messaging.DropDynamicAuthority(operation)
+				cancel()
+				if err != nil {
+					if !waitRank2AuthorityRetry(ctx, changed, service.rank1.retryDelay) {
+						return nil
+					}
+					continue
+				}
+			}
 		} else if state == rank2xmpp.DurableLive {
 			// StateChanged is lossless as an edge but multiple transitions may
 			// coalesce before this goroutine reads them. A fresh replacement can
@@ -1616,7 +1729,14 @@ func (service *authenticatedMessagingService) monitorRank2ForRank1(ctx context.C
 				}
 			}
 			operation, cancel := context.WithTimeout(ctx, service.rank1.timeout)
-			failure := service.messaging.EnsureCurrentMembership(operation)
+			var failure *mesh.Failure
+			if service.rank1.authority.dynamic {
+				if err := service.rank1.authority.openDynamic(operation); err != nil {
+					failure = &mesh.Failure{Code: mesh.FailureUnavailable}
+				}
+			} else {
+				failure = service.messaging.EnsureCurrentMembership(operation)
+			}
 			cancel()
 			if failure == nil {
 				// A wake before PublishCurrentMembership is consumed while peer
@@ -1900,18 +2020,52 @@ func (service *authenticatedMessagingService) meshRefresh(ctx context.Context, _
 }
 
 func (service *authenticatedMessagingService) messageSend(ctx context.Context, _ coreruntime.Services, args model.MessageSendArgs) (model.SendResult, *sessionkernel.ProviderError) {
+	if failure := service.terminalConnectivityFailure(); failure != nil {
+		return model.SendResult{}, failure
+	}
 	result, failure := service.messaging.MessageSend(ctx, args)
+	if failure != nil {
+		if terminal := service.terminalConnectivityFailure(); terminal != nil {
+			return model.SendResult{}, terminal
+		}
+	}
 	return result, providerMeshFailure(failure)
 }
 
 func (service *authenticatedMessagingService) messageRequest(ctx context.Context, _ coreruntime.Services, args model.MessageRequestArgs) (model.ResponseResult, *sessionkernel.ProviderError) {
+	if failure := service.terminalConnectivityFailure(); failure != nil {
+		return model.ResponseResult{}, failure
+	}
 	result, failure := service.messaging.MessageRequest(ctx, args)
+	if failure != nil {
+		if terminal := service.terminalConnectivityFailure(); terminal != nil {
+			return model.ResponseResult{}, terminal
+		}
+	}
 	return result, providerMeshFailure(failure)
 }
 
 func (service *authenticatedMessagingService) messageReply(ctx context.Context, _ coreruntime.Services, args model.MessageReplyArgs) (model.SendResult, *sessionkernel.ProviderError) {
+	if failure := service.terminalConnectivityFailure(); failure != nil {
+		return model.SendResult{}, failure
+	}
 	result, failure := service.messaging.MessageReply(ctx, args)
+	if failure != nil {
+		if terminal := service.terminalConnectivityFailure(); terminal != nil {
+			return model.SendResult{}, terminal
+		}
+	}
 	return result, providerMeshFailure(failure)
+}
+
+func (service *authenticatedMessagingService) terminalConnectivityFailure() *sessionkernel.ProviderError {
+	if service == nil || service.rank1 == nil || service.rank1.client == nil {
+		return providerError(sessionkernel.ProviderInternal)
+	}
+	if err := service.rank1.client.TerminalFailure(); err != nil {
+		return classifyConnectivityError(nil, err)
+	}
+	return nil
 }
 
 func (service *authenticatedMessagingService) deliveryRetry(ctx context.Context, _ coreruntime.Services, args model.MessageIDArgs) (model.EmptyResult, *sessionkernel.ProviderError) {

@@ -77,7 +77,7 @@ func qaStageBAllow(t *testing.T, core *Core, id, path, peer string) {
 	}
 }
 
-func TestStageBAcceptancePublicMessagingUsesFreshCurrentMembership(t *testing.T) {
+func TestStageBAcceptancePublicMessagingHandshakesOnFirstSend(t *testing.T) {
 	session := newQAStageBEndpointSession("")
 	core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
 	qaStageBAuthenticate(t, core, "qa-messaging-auth")
@@ -91,8 +91,11 @@ func TestStageBAcceptancePublicMessagingUsesFreshCurrentMembership(t *testing.T)
 	if !refresh.OK || refresh.Error != nil {
 		t.Fatalf("mesh refresh = %#v", refresh)
 	}
-	if phases := session.observedPhases(); len(phases) != 8 || phases[4] != "discovery" || phases[6] != "topology" || phases[7] != "topology" {
-		t.Fatalf("authentication/list/refresh topology phases = %v", phases)
+	if phases := session.observedPhases(); len(phases) != 5 || phases[4] != "time" {
+		t.Fatalf("login/list/refresh unexpectedly downloaded membership: %v", phases)
+	}
+	if bare, exact, _ := session.peerQuerySnapshot(); len(bare) != 0 || len(exact) != 0 {
+		t.Fatalf("peer handshake before first contact: bare=%v exact=%v", bare, exact)
 	}
 
 	qaStageBAllow(t, core, "qa-send-policy", "/messages", "peer@example.test")
@@ -100,12 +103,17 @@ func TestStageBAcceptancePublicMessagingUsesFreshCurrentMembership(t *testing.T)
 		CommandBase: qaStageBBase("qa-send"),
 		To:          "peer@example.test",
 		Payload: v1.Payload{Value: v1.NativePayload{
-			ContentType: "application/octet-stream", Path: "/messages", Body: []byte("current-membership"),
+			ContentType: "application/octet-stream", Path: "/messages", Body: []byte("first-contact"),
 		}},
 	})
 	result, ok := send.Result.(v1.SendResult)
 	if !send.OK || send.Error != nil || !ok || !result.Accepted || result.MessageID == "" || result.ConversationID == "" {
 		t.Fatalf("message.send = %#v", send)
+	}
+	// First send resolves the bare recipient. Rank1 establishment may run
+	// alongside it and must verify the exact installation before connecting.
+	if bare, exact, _ := session.peerQuerySnapshot(); len(bare) != 1 || bare[0] != "peer@example.test" || len(exact) > 1 || (len(exact) == 1 && exact[0] != "peer@example.test/r2.install-peer.nonce-1") {
+		t.Fatalf("first send handshake = bare=%v exact=%v", bare, exact)
 	}
 
 	var application rank2xmpp.Stanza
@@ -114,7 +122,7 @@ func TestStageBAcceptancePublicMessagingUsesFreshCurrentMembership(t *testing.T)
 			application = stanza
 		}
 	}
-	if application.Kind != rank2xmpp.StanzaEnvelope || application.From != "agent@example.test/mesh-one" || application.To != "peer@example.test/mesh-one" || application.MeshID != "mesh-one" {
+	if application.Kind != rank2xmpp.StanzaEnvelope || application.From != "agent@example.test/mesh-one" || application.To != "peer@example.test/r2.install-peer.nonce-1" || application.MeshID != "mesh-one" {
 		t.Fatalf("Rank2 projection = %#v", application)
 	}
 	codec, err := protocol.NewCodec()
@@ -126,7 +134,42 @@ func TestStageBAcceptancePublicMessagingUsesFreshCurrentMembership(t *testing.T)
 		t.Fatalf("decode Rank2 envelope: %v", err)
 	}
 	if envelope.MessageID != string(result.MessageID) || envelope.ConversationID != string(result.ConversationID) || envelope.Sender != application.From || envelope.Recipient != application.To {
-		t.Fatalf("current-membership envelope = %#v", envelope)
+		t.Fatalf("server-authorized envelope = %#v", envelope)
+	}
+	qaStageBCloseCore(t, core)
+}
+
+func TestStageBRank1RejectsCachedInstallationWhenExactServerAuthorizationFails(t *testing.T) {
+	session := newQAStageBEndpointSession("")
+	core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
+	qaStageBAuthenticate(t, core, "qa-rank1-exact-auth")
+
+	core.diagnosticsFeed.mu.RLock()
+	source := core.diagnosticsFeed.diagnostics
+	core.diagnosticsFeed.mu.RUnlock()
+	service, ok := source.(*authenticatedMessagingService)
+	if !ok || service.messaging == nil || service.rank1 == nil || service.rank1.authority == nil {
+		t.Fatalf("authenticated messaging service unavailable: %T", source)
+	}
+
+	const oldFull = "peer@example.test/r2.install-peer.nonce-1"
+	if failure := service.messaging.AuthorizeExactPeer(context.Background(), oldFull); failure != nil {
+		t.Fatalf("authorize initial exact installation: %#v", failure)
+	}
+	if failure := service.messaging.AuthorizeCurrentPeer(oldFull); failure != nil {
+		t.Fatalf("initial installation not cached: %#v", failure)
+	}
+	// The server now selects installation B for bare-name resolution, but A
+	// is no longer authorized. A bare lookup must not validate A's Rank1 link.
+	session.setPeer("peer@example.test", rank2xmpp.AuthorizedPeer{
+		FullJID: "peer@example.test/r2.install-other.nonce-2", InstallationID: "install-other", SessionGeneration: "session-2",
+	}, nil)
+	if err := service.rank1.authority.AuthorizeRank1(context.Background(), oldFull); !errors.Is(err, rank2xmpp.ErrUnavailable) {
+		t.Fatalf("Rank1 old installation authorization = %v, want unavailable", err)
+	}
+	bare, exact, _ := session.peerQuerySnapshot()
+	if len(bare) != 0 || len(exact) != 2 || exact[0] != oldFull || exact[1] != oldFull {
+		t.Fatalf("Rank1 used a bare query or skipped exact recheck: bare=%v exact=%v", bare, exact)
 	}
 	qaStageBCloseCore(t, core)
 }
@@ -153,69 +196,31 @@ func TestStageBAcceptanceAdvertisesTransportProtectedLargePayloads(t *testing.T)
 	qaStageBCloseCore(t, core)
 }
 
-func TestStageBAcceptanceMalformedAbsentAndUnavailableTopologyFailClosed(t *testing.T) {
+func TestStageBAcceptanceUnavailableAndForbiddenTargetsFailBeforeSend(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		snapshot rank2xmpp.AuthoritySnapshot
+		name    string
+		failure error
+		code    v1.ErrorCode
 	}{
-		{name: "empty snapshot", snapshot: rank2xmpp.AuthoritySnapshot{}},
-		{name: "local absent", snapshot: rank2xmpp.AuthoritySnapshot{Members: []string{"peer@example.test/mesh-one"}}},
-		{name: "noncanonical members", snapshot: rank2xmpp.AuthoritySnapshot{Members: []string{"peer@example.test/mesh-one", "agent@example.test/mesh-one"}}},
+		{name: "unavailable", failure: rank2xmpp.ErrUnavailable, code: v1.ErrorCodeConnectivityUnavailable},
+		{name: "forbidden", failure: rank2xmpp.ErrAuthentication, code: v1.ErrorCodeAuthorizationRejected},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			session := newQAStageBEndpointSession("")
-			session.replaceGroup(test.snapshot, nil)
+			session.setPeer("peer@example.test", rank2xmpp.AuthorizedPeer{}, test.failure)
 			core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
-			completion := qaStageBCompletion(t, core, qaStageBAuthCommand(v1.CommandAuthConnect, "qa-topology-"+test.name))
-			if completion.OK || completion.Result != nil || completion.Error == nil || completion.Error.Code != v1.ErrorCodeConnectivityUnavailable || !completion.Error.Retryable || completion.Error.Stage != v1.ErrorStageAuth {
-				t.Fatalf("invalid topology authentication = %#v", completion)
+			qaStageBAuthenticate(t, core, "qa-peer-auth-"+test.name)
+			qaStageBAllow(t, core, "qa-peer-policy-"+test.name, "/messages", "peer@example.test")
+			failed := qaStageBCompletion(t, core, v1.MessageSendCommand{CommandBase: qaStageBBase("qa-peer-send-" + test.name), To: "peer@example.test", Payload: v1.Payload{Value: v1.NativePayload{ContentType: "text/plain", Path: "/messages", Body: []byte("not sent")}}})
+			if failed.OK || failed.Error == nil || failed.Error.Code != test.code || len(session.sentSnapshot()) != 0 {
+				t.Fatalf("%s target failure=%#v sent=%#v", test.name, failed, session.sentSnapshot())
 			}
-			status, err := core.Status(context.Background())
-			if err != nil || status.Lifecycle != v1.LifecycleCreated || status.AgentID != "" || status.MeshID != "" || len(session.sentSnapshot()) != 0 {
-				t.Fatalf("invalid topology retained state: status=%#v sent=%#v err=%v", status, session.sentSnapshot(), err)
+			if bare, _, _ := session.peerQuerySnapshot(); len(bare) != 1 || bare[0] != "peer@example.test" {
+				t.Fatalf("%s handshake calls=%v", test.name, bare)
 			}
 			qaStageBCloseCore(t, core)
 		})
 	}
-
-	session := newQAStageBEndpointSession("")
-	core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
-	qaStageBAuthenticate(t, core, "qa-stale-auth")
-	session.replaceGroup(rank2xmpp.AuthoritySnapshot{}, rank2xmpp.ErrUnavailable)
-	stale := qaStageBCompletion(t, core, v1.MeshMembershipRefreshCommand{CommandBase: qaStageBBase("qa-stale-refresh")})
-	if stale.OK || stale.Error == nil || stale.Error.Code != v1.ErrorCodeConnectivityUnavailable || !stale.Error.Retryable {
-		t.Fatalf("stale topology refresh = %#v", stale)
-	}
-	qaStageBCloseCore(t, core)
-}
-
-func TestStageBAcceptanceInstalledAuthorityPersistsUntilExplicitRefresh(t *testing.T) {
-	session := newQAStageBEndpointSession("")
-	core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
-	qaStageBAuthenticate(t, core, "qa-recovery-auth")
-
-	// Server state does not replace installed session authority until a control
-	// edge or an explicit synchronization fences and replaces it.
-	session.replaceGroup(rank2xmpp.AuthoritySnapshot{}, rank2xmpp.ErrUnavailable)
-	removed := qaStageBCompletion(t, core, v1.MeshListCommand{CommandBase: qaStageBBase("qa-removed-list")})
-	removedMeshes, ok := removed.Result.(v1.MeshListResult)
-	if !removed.OK || removed.Error != nil || !ok || len(removedMeshes.Meshes) != 1 || !removedMeshes.Meshes[0].Active {
-		t.Fatalf("installed authority mesh.list = %#v", removed)
-	}
-
-	// A later fresh complete authorized snapshot recovers the same Core; no
-	// cached snapshot is substituted.
-	session.replaceGroup(rank2xmpp.AuthoritySnapshot{Members: []string{"agent@example.test/mesh-one", "peer@example.test/mesh-one"}}, nil)
-	refresh := qaStageBCompletion(t, core, v1.MeshMembershipRefreshCommand{CommandBase: qaStageBBase("qa-readd-refresh")})
-	if !refresh.OK || refresh.Error != nil {
-		t.Fatalf("re-add refresh = %#v", refresh)
-	}
-	list := qaStageBCompletion(t, core, v1.MeshListCommand{CommandBase: qaStageBBase("qa-readd-list")})
-	meshes, ok := list.Result.(v1.MeshListResult)
-	if !list.OK || !ok || len(meshes.Meshes) != 1 || !meshes.Meshes[0].Active || meshes.Meshes[0].MeshID != "mesh-one" {
-		t.Fatalf("re-added mesh.list = %#v", list)
-	}
-	qaStageBCloseCore(t, core)
 }
 
 func TestStageBAcceptanceIngressPumpContinuesAfterEnvelopeLocalRejection(t *testing.T) {
@@ -318,12 +323,12 @@ func qaStageBInboundEvent(t *testing.T, body string) rank2xmpp.Event {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conversationID, err := conversation.DeriveID("mesh-one", "agent@example.test/mesh-one", "peer@example.test/mesh-one")
+	conversationID, err := conversation.DeriveID("mesh-one", "agent@example.test/mesh-one", "peer@example.test/r2.install-peer.nonce-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	envelope, err := protocol.NewEnvelope(protocol.EnvelopeInput{
-		ConversationID: conversationID, Sender: "peer@example.test/mesh-one", Recipient: "agent@example.test/mesh-one",
+		ConversationID: conversationID, Sender: "peer@example.test/r2.install-peer.nonce-1", Recipient: "agent@example.test/mesh-one",
 		MeshID: "mesh-one", Mode: protocol.ModeMessage,
 		CreatedAt: time.Date(2026, 8, 13, 12, 0, 0, 123456000, time.UTC), ClockUncertainty: time.Millisecond,
 		Payload: descriptor,
@@ -377,20 +382,14 @@ func TestStageBAcceptanceFailureTaxonomy(t *testing.T) {
 	session := newQAStageBEndpointSession("")
 	core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
 	qaStageBAuthenticate(t, core, "qa-taxonomy-auth")
-	policy := qaStageBCompletion(t, core, v1.PolicySetCommand{
-		CommandBase: qaStageBBase("qa-policy-deny-all"),
-		Rules:       []v1.PolicyRule{},
-	})
-	if !policy.OK || policy.Error != nil {
-		t.Fatalf("install explicit deny policy = %#v", policy)
-	}
 
 	rejected := qaStageBCompletion(t, core, v1.MessageSendCommand{
 		CommandBase: qaStageBBase("qa-policy-rejected"), To: "peer@example.test",
 		Payload: v1.Payload{Value: v1.NativePayload{ContentType: "application/octet-stream", Path: "/denied", Body: []byte("denied")}},
 	})
 	if rejected.OK || rejected.Result != nil || rejected.Error == nil || rejected.Error.Code != v1.ErrorCodeAuthorizationRejected || rejected.Error.Stage != v1.ErrorStagePolicy || rejected.Error.Location != v1.ErrorLocationLocal || rejected.Error.Retryable {
-		t.Fatalf("policy-rejected message.send taxonomy = %#v", rejected)
+		bare, exact, _ := session.peerQuerySnapshot()
+		t.Fatalf("policy-rejected message.send taxonomy = %#v error=%+v queries=%v/%v", rejected, rejected.Error, bare, exact)
 	}
 
 	qaStageBCloseCore(t, core)

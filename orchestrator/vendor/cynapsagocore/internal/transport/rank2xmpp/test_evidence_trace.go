@@ -11,6 +11,10 @@ type rank2EvidenceRecord struct {
 	Deadline         string `json:"deadline,omitempty"`
 	ElementNamespace string `json:"element_namespace,omitempty"`
 	ElementLocal     string `json:"element_local,omitempty"`
+	StanzaID         string `json:"stanza_id,omitempty"`
+	StanzaType       string `json:"stanza_type,omitempty"`
+	From             string `json:"from,omitempty"`
+	To               string `json:"to,omitempty"`
 	ClientGeneration uint64 `json:"client_generation,omitempty"`
 	StateEpoch       uint64 `json:"state_epoch,omitempty"`
 	SessionEpoch     uint64 `json:"session_epoch,omitempty"`
@@ -21,4 +25,6 @@ type rank2EvidenceRecord struct {
 	Admitted         bool   `json:"admitted"`
 	Reconnect        bool   `json:"reconnect"`
 	Resumed          bool   `json:"resumed"`
+	Correlated       bool   `json:"correlated,omitempty"`
+	Handled          bool   `json:"handled,omitempty"`
 }

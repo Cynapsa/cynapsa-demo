@@ -1170,6 +1170,8 @@ func classifyRPCError(err error) *Failure {
 		return &Failure{Code: FailureCancelled}
 	case errors.Is(err, rpc.ErrAuthorizationRejected):
 		return &Failure{Code: FailureAuthorization}
+	case errors.Is(err, rpc.ErrServerUnavailable):
+		return &Failure{Code: FailureUnavailable}
 	case errors.Is(err, rpc.ErrUnknown), errors.Is(err, rpc.ErrDuplicate), errors.Is(err, rpc.ErrInvalidResponse):
 		return &Failure{Code: FailureRejected}
 	default:

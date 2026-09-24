@@ -40,15 +40,18 @@ they are not local identity overrides.
 
 ## Choose a run mode
 
-### Client against the deployed demo
+### Client against deployed agents
 
-Only run the client. Configure its mesh ID and the deployed orchestrator's bare
-agent ID together with the client enrollment token.
+Only run the client if both demo worker pools have been explicitly scaled back
+up. They are currently disabled at zero instances. Configure the client's mesh
+ID and the orchestrator's bare agent ID with the client enrollment token.
 
 ### All three entities locally
 
 Use separate local Cynapsa installations. Do not start a local server with the
-same installation profile while its deployed Cloud Run worker is active.
+same installation profile while a deployed Cloud Run worker is active. Both
+demo worker pools are currently disabled, but do not reuse their saved Cloud
+Run profiles or previously consumed enrollment tokens for local installs.
 
 For isolated local testing, create or select server identities in one mesh and
 generate fresh enrollment tokens. Start maps first. Copy its printed bare agent

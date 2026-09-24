@@ -1,7 +1,9 @@
 # Run the Cynapsa demo client
 
-The client runs on your laptop and communicates with the deployed demo agents
-over Cynapsa. You only need Docker and a Cynapsa enrollment token. The
+The client runs on your laptop and communicates with locally running maps and
+orchestrator agents over Cynapsa. Start those two containers first; their GCP
+worker pools are disabled at zero instances. You need Docker and a Cynapsa
+enrollment token. The
 application, Python SDK source, and Go Core source are all included in this
 directory and built into its image.
 
@@ -18,7 +20,7 @@ tracked repository file.
 ## Download only the client
 
 ```sh
-git clone --filter=blob:none --sparse https://github.com/Cynapsa/cynapsa-demo.git
+git clone --branch remove-snapshot-local-demo --filter=blob:none --sparse https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo
 git sparse-checkout set client
 cd client

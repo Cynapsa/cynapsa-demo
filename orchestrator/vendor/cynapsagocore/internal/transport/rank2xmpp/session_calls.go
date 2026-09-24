@@ -2,6 +2,7 @@ package rank2xmpp
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Cynapsa/cynapsagocore/internal/payload"
@@ -91,7 +92,8 @@ func sendSession(session Session, ctx context.Context, stanza Stanza) (err error
 		watchdogDone chan struct{}
 		stopWatchdog func() bool
 	)
-	if ctx.Done() != nil {
+	_, melliumOwnsCancellation := session.(*melliumSession)
+	if ctx.Done() != nil && !melliumOwnsCancellation {
 		watchdogDone = make(chan struct{})
 		stopWatchdog = context.AfterFunc(ctx, func() {
 			defer close(watchdogDone)
@@ -115,6 +117,10 @@ func sendSession(session Session, ctx context.Context, stanza Stanza) (err error
 	}()
 	err = session.Send(ctx, owned)
 	if contextErr := exactContextError(ctx); contextErr != nil {
+		var staged *wireError
+		if errors.As(err, &staged) && staged.stage == wireNotStarted {
+			return err
+		}
 		return contextErr
 	}
 	return err

@@ -16,7 +16,7 @@ from typing import Any, NoReturn, TypeVar
 
 from cynapsa._inbound import AztmLocalDiagnostic, InboundRuntime
 from cynapsa.events import AztmEvent
-from cynapsa.exceptions import NativeError, SdkSafetyTimeout
+from cynapsa.exceptions import NativeError, RemoteNativeError, SdkSafetyTimeout
 from cynapsa.http import CynapsaRequest, CynapsaResponse, HTTPRequestPayload, HTTPResponsePayload
 from cynapsa.messaging import (
     AztmResponse,
@@ -153,6 +153,8 @@ def _valid_diagnostic_id(value: object) -> bool:
 def _public_exception(error: BaseException) -> BaseException:
     """Project one internal failure into the closed Session error surface."""
 
+    if isinstance(error, RemoteNativeError):
+        return RemoteNativeError(error.status, error.response)
     if isinstance(error, NativeError):
         if (
             error.code not in PUBLIC_ERROR_MESSAGES
@@ -206,6 +208,14 @@ def _raise_public(error: BaseException) -> NoReturn:
     projected.__cause__ = None
     projected.__context__ = None
     raise projected.with_traceback(None) from None
+
+
+def _native_rpc_response(response: CynapsaResponse) -> CynapsaResponse:
+    """Project a canonical response for a native caller, not an HTTP hook."""
+
+    if response.status_code >= 400:
+        raise RemoteNativeError(CYNAPSA_STATUS_V1_ERROR, response)
+    return response
 
 
 def _utf8_length(value: str) -> int:
@@ -1102,7 +1112,7 @@ class AztmSession(_SessionBase):
                 expected_payload=HTTPResponsePayload,
             )
             assert type(response.payload) is CynapsaResponse
-            return response.payload
+            return _native_rpc_response(response.payload)
         except BaseException as error:
             failure = error
         assert failure is not None
@@ -1373,7 +1383,7 @@ class AsyncAztmSession(_SessionBase):
                 expected_payload=HTTPResponsePayload,
             )
             assert type(response.payload) is CynapsaResponse
-            return response.payload
+            return _native_rpc_response(response.payload)
 
         failure: BaseException | None = None
         try:

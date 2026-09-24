@@ -21,7 +21,10 @@ image. Encrypted Cynapsa state persists in the
 `.env` after enrollment; `GEMINI_API_KEY` is required on every run.
 `DEMO_MESH_ID` and `DEMO_MAPS_AGENT_ID` are also required on every run.
 
-Use `./run.sh --build` to force a rebuild from this directory.
+Use `./run.sh --build` to force a rebuild from this directory. The image takes
+`CYNAPSA_TOKEN` at container startup from the ignored `.env` or shell
+environment only when its state volume has no saved profile. No token is baked
+into the Dockerfile or image.
 
 ## Test another identity
 
@@ -31,6 +34,7 @@ CYNAPSA_TOKEN='another-enrollment-token' \
   ./run.sh
 ```
 
-The deployed Cloud Run worker pool is named `cynapsa-demo-orchestrator` in
-project `aztm-amesh`, region `us-central1`. Its secrets and installation state
-are provided through Secret Manager and are not part of this repository.
+The Cloud Run worker pool `cynapsa-demo-orchestrator` is disabled at zero
+instances. For this branch, run this directory locally with a fresh enrollment
+token and an empty state volume. Do not reuse a token consumed by the former
+cloud installation.

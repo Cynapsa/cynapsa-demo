@@ -52,6 +52,7 @@ type Registry struct {
 	nextMemberEpoch   uint64
 	lanes             map[string]*Lane
 	retiring          map[*Lane]struct{}
+	dynamicRetiring   map[string]*Lane
 	closed            bool
 	closeDone         chan struct{}
 }
@@ -64,7 +65,7 @@ func NewRegistry(config RegistryConfig) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	registry := &Registry{config: config, budget: budget, state: AuthoritySynchronizing, members: make(map[string]struct{}, config.MemberCapacity), memberEpochs: make(map[string]uint64, config.MemberCapacity), lanes: make(map[string]*Lane), retiring: make(map[*Lane]struct{})}
+	registry := &Registry{config: config, budget: budget, state: AuthoritySynchronizing, members: make(map[string]struct{}, config.MemberCapacity), memberEpochs: make(map[string]uint64, config.MemberCapacity), lanes: make(map[string]*Lane), retiring: make(map[*Lane]struct{}), dynamicRetiring: make(map[string]*Lane)}
 	// Even tokens are fenced; the low bit is the exact-session Ready state.
 	registry.authority.Store(2)
 	return registry, nil
@@ -437,6 +438,163 @@ func (registry *Registry) Authorize(peerID string) error {
 	return nil
 }
 
+// ResetDynamicAuthority fences every old peer before a new authenticated
+// server session is allowed to authorize peers one at a time. The caller must
+// independently fence topology admission before invoking this method.
+func (registry *Registry) ResetDynamicAuthority(ctx context.Context) error {
+	return registry.resetDynamicAuthority(ctx, true)
+}
+
+// DropDynamicAuthority is the disconnect boundary. It destroys peer state
+// without publishing a new authenticated-session capability.
+func (registry *Registry) DropDynamicAuthority(ctx context.Context) error {
+	return registry.resetDynamicAuthority(ctx, false)
+}
+
+func (registry *Registry) resetDynamicAuthority(ctx context.Context, reopen bool) error {
+	if registry == nil || ctx == nil {
+		return ErrInvalidConfig
+	}
+	registry.transitionMu.Lock()
+	defer registry.transitionMu.Unlock()
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		return ErrClosed
+	}
+	if registry.blockAuthority() == 0 {
+		registry.mu.Unlock()
+		return ErrEpochExhausted
+	}
+	registry.state = AuthoritySynchronizing
+	registry.session = nil
+	registry.snapshotInstalled = false
+	lanes := make([]*Lane, 0, len(registry.lanes))
+	for _, lane := range registry.lanes {
+		lane.Remove()
+		lanes = append(lanes, lane)
+		registry.dynamicRetiring[lane.config.PeerID] = lane
+	}
+	for _, lane := range registry.dynamicRetiring {
+		lanes = append(lanes, lane)
+	}
+	registry.lanes = make(map[string]*Lane)
+	registry.members = make(map[string]struct{})
+	registry.memberEpochs = make(map[string]uint64)
+	registry.mu.Unlock()
+	for _, lane := range lanes {
+		if err := lane.Join(ctx); err != nil {
+			return err
+		}
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.closed {
+		return ErrClosed
+	}
+	clear(registry.dynamicRetiring)
+	if !reopen {
+		registry.state = AuthorityPaused
+		return nil
+	}
+	token := registry.authority.Load()
+	if token == 0 || token&1 != 0 || !registry.authority.CompareAndSwap(token, token|1) {
+		return ErrUnauthorized
+	}
+	registry.snapshotInstalled = true
+	registry.state = AuthorityReady
+	return nil
+}
+
+// AddDynamicPeer installs one server-authorized exact endpoint. It does not
+// infer any other member from a group roster or from a peer's address.
+func (registry *Registry) AddDynamicPeer(peerID string) error {
+	if registry == nil || protocol.ValidateAgentIdentity(peerID) != nil {
+		return ErrInvalidConfig
+	}
+	registry.transitionMu.Lock()
+	defer registry.transitionMu.Unlock()
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		return ErrClosed
+	}
+	if registry.state != AuthorityReady || !registry.authorityReady() {
+		registry.mu.Unlock()
+		return ErrUnavailable
+	}
+	if _, exists := registry.members[peerID]; exists {
+		registry.mu.Unlock()
+		return nil
+	}
+	if _, retiring := registry.dynamicRetiring[peerID]; retiring {
+		registry.mu.Unlock()
+		return ErrUnavailable
+	}
+	if len(registry.members) >= registry.config.MemberCapacity {
+		registry.mu.Unlock()
+		return ErrQueueFull
+	}
+	if registry.nextMemberEpoch == math.MaxUint64 {
+		registry.mu.Unlock()
+		return ErrEpochExhausted
+	}
+	registry.mu.Unlock()
+	if !callFencePeer(registry.config.AllowPeer, peerID) {
+		return ErrUnavailable
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.closed || registry.state != AuthorityReady || !registry.authorityReady() {
+		return ErrUnavailable
+	}
+	registry.nextMemberEpoch++
+	registry.members[peerID] = struct{}{}
+	registry.memberEpochs[peerID] = registry.nextMemberEpoch
+	return nil
+}
+
+// RemoveDynamicPeer installs a terminal fence, scrubs external peer state,
+// and joins the exact lane before returning (the action-ACK boundary).
+func (registry *Registry) RemoveDynamicPeer(ctx context.Context, peerID string) error {
+	if registry == nil || ctx == nil || protocol.ValidateAgentIdentity(peerID) != nil {
+		return ErrInvalidConfig
+	}
+	registry.transitionMu.Lock()
+	defer registry.transitionMu.Unlock()
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		return ErrClosed
+	}
+	_, present := registry.members[peerID]
+	lane := registry.lanes[peerID]
+	if lane != nil {
+		lane.Remove()
+		delete(registry.lanes, peerID)
+		registry.dynamicRetiring[peerID] = lane
+	} else {
+		lane = registry.dynamicRetiring[peerID]
+	}
+	delete(registry.members, peerID)
+	delete(registry.memberEpochs, peerID)
+	registry.mu.Unlock()
+	if present && !callFencePeer(registry.config.FencePeer, peerID) {
+		return ErrUnavailable
+	}
+	if lane != nil {
+		if err := lane.Join(ctx); err != nil {
+			return err
+		}
+		registry.mu.Lock()
+		if registry.dynamicRetiring[peerID] == lane {
+			delete(registry.dynamicRetiring, peerID)
+		}
+		registry.mu.Unlock()
+	}
+	return nil
+}
+
 // AdmitAuthenticatedInbound is called only after transport authentication has
 // bound peerID. During synchronization or pause, the work is quarantined.
 func (registry *Registry) AdmitAuthenticatedInbound(ctx context.Context, peerID string, work Work) (Result, error) {
@@ -573,8 +731,12 @@ func (registry *Registry) Close(ctx context.Context) error {
 	for lane := range registry.retiring {
 		lanes = append(lanes, lane)
 	}
+	for _, lane := range registry.dynamicRetiring {
+		lanes = append(lanes, lane)
+	}
 	registry.lanes = make(map[string]*Lane)
 	registry.retiring = make(map[*Lane]struct{})
+	registry.dynamicRetiring = make(map[string]*Lane)
 	registry.members = make(map[string]struct{})
 	registry.memberEpochs = make(map[string]uint64)
 	registry.mu.Unlock()

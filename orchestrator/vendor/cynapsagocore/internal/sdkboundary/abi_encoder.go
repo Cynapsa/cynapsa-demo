@@ -522,16 +522,20 @@ func wirePayload(value v1.Payload) (payloadWire, error) {
 	var output payloadWire
 	switch payload := value.Value.(type) {
 	case v1.NativePayload:
-		output.Native = &nativePayloadWire{ContentType: payload.ContentType, Path: payload.Path, Body: cloneBytes(payload.Body)}
+		output.Native = &nativePayloadWire{ContentType: payload.ContentType, Path: payload.Path, Body: wireBody(payload.Body)}
 	case v1.HTTPRequestPayload:
-		output.HTTPRequest = &httpRequestPayloadWire{Method: payload.Method, Path: payload.Path, Query: payload.Query, Headers: wireHeaders(payload.Headers), Body: cloneBytes(payload.Body)}
+		output.HTTPRequest = &httpRequestPayloadWire{Method: payload.Method, Path: payload.Path, Query: payload.Query, Headers: wireHeaders(payload.Headers), Body: wireBody(payload.Body)}
 	case v1.HTTPResponsePayload:
-		output.HTTPResponse = &httpResponsePayloadWire{StatusCode: payload.StatusCode, Reason: payload.Reason, Headers: wireHeaders(payload.Headers), Body: cloneBytes(payload.Body), Error: wireApplicationError(payload.Error)}
+		output.HTTPResponse = &httpResponsePayloadWire{StatusCode: payload.StatusCode, Reason: payload.Reason, Headers: wireHeaders(payload.Headers), Body: wireBody(payload.Body), Error: wireApplicationError(payload.Error)}
 	case v1.PayloadHandle:
 		handle := string(payload)
 		output.Handle = &handle
 	}
 	return output, nil
+}
+func wireBody(value []byte) []byte {
+	// The canonical ABI encodes an empty body as base64 text "", never null.
+	return append([]byte{}, value...)
 }
 func wireHeaders(values []v1.Header) []headerWire {
 	output := make([]headerWire, len(values))

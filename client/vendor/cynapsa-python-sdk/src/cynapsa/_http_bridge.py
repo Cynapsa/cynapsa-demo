@@ -24,9 +24,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from email.message import Message
 from http import HTTPStatus
-from types import SimpleNamespace
 from typing import Any, NoReturn
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 import cynapsa.session as _session
 from cynapsa.events import MessageReceived, decode_event
@@ -728,50 +727,94 @@ class _PatchManager:
                         timeout_value,
                         use_global_opener,
                     ) = _urllib_request_arguments(*args, **kwargs)
-                    raw_url = (
-                        url.full_url
-                        if isinstance(url, urllib_request.Request)
-                        else url
-                    )
-                    target = _parse_address(raw_url, origin_only=False)
-                    request = _prepare_urllib_request(
-                        urllib_request,
-                        url,
-                        data,
-                        timeout=timeout_value,
-                        use_global_opener=use_global_opener,
-                    )
-                    bridge, key = route
-                    payload = HTTPRequestPayload(
-                        request.get_method(),
-                        target.path,
-                        target.query,
-                        _urllib_request_headers(request),
-                        _urllib_request_body(request.data),
-                    )
                     timeout = (
                         None
                         if timeout_value is socket._GLOBAL_DEFAULT_TIMEOUT
                         else _urllib_request_timeout_seconds(timeout_value)
                     )
-                    timeout_error: BaseException | None = None
-                    try:
-                        canonical = bridge.dispatch_sync(
-                            payload,
-                            origin_key=key,
-                            timeout=timeout,
-                        )
-                    except BaseException as exc:
-                        if _is_rpc_timeout(exc):
-                            timeout_error = _urllib_request_timeout_error()
-                        else:
-                            raise
-                    if timeout_error is not None:
-                        _raise_http_timeout(timeout_error)
-                    return _urllib_request_response(
-                        canonical,
-                        url=request.full_url,
+                    original_origin = route[1]
+                    initial_url = (
+                        url.full_url
+                        if isinstance(url, urllib_request.Request)
+                        else url
                     )
+                    redirects: set[str] = {initial_url}
+                    redirect_handler = urllib_request.HTTPRedirectHandler()
+                    while True:
+                        raw_url = (
+                            url.full_url
+                            if isinstance(url, urllib_request.Request)
+                            else url
+                        )
+                        target = _parse_address(raw_url, origin_only=False)
+                        request = _prepare_urllib_request(
+                            urllib_request,
+                            url,
+                            data,
+                            timeout=timeout_value,
+                            use_global_opener=use_global_opener,
+                        )
+                        bridge, key = route
+                        payload = HTTPRequestPayload(
+                            request.get_method(),
+                            target.path,
+                            target.query,
+                            _urllib_request_headers(request),
+                            _urllib_request_body(request.data),
+                        )
+                        timeout_error: BaseException | None = None
+                        try:
+                            canonical = bridge.dispatch_sync(
+                                payload,
+                                origin_key=key,
+                                timeout=timeout,
+                            )
+                        except BaseException as exc:
+                            if _is_rpc_timeout(exc):
+                                timeout_error = _urllib_request_timeout_error()
+                            else:
+                                raise
+                        if timeout_error is not None:
+                            _raise_http_timeout(timeout_error)
+                        response = _urllib_request_response(
+                            canonical,
+                            url=request.full_url,
+                        )
+                        status = canonical.status_code
+                        if status in (301, 302, 303, 307, 308):
+                            location = response.info().get("location") or response.info().get("uri")
+                            if location:
+                                next_url = urljoin(request.full_url, location)
+                                # A mapped response must never escape to an
+                                # ordinary HTTP connection or carry caller
+                                # credentials to a different virtual origin.
+                                next_route = self.urllib_bridge_for(next_url)
+                                if (
+                                    next_route is None
+                                    or next_route[1] != original_origin
+                                    or next_url in redirects
+                                    or len(redirects) > redirect_handler.max_redirections
+                                ):
+                                    raise _urllib_error.HTTPError(
+                                        request.full_url, status,
+                                        "Unsafe or repeated mapped redirect",
+                                        response.info(), response,
+                                    )
+                                next_request = redirect_handler.redirect_request(
+                                    request, response, status, canonical.reason,
+                                    response.info(), next_url,
+                                )
+                                if next_request is not None:
+                                    redirects.add(next_url)
+                                    response.close()
+                                    url, data, route = next_request, None, next_route
+                                    continue
+                        if status == 304 or status >= 300:
+                            raise _urllib_error.HTTPError(
+                                request.full_url, status, canonical.reason,
+                                response.info(), response,
+                            )
+                        return response
 
                 self._patch(urllib_request, "urlopen", urllib_request_urlopen)
 
@@ -1312,23 +1355,16 @@ def _aiohttp_response(
         request.url,
     )
     loop = asyncio.get_running_loop()
-    response_options = {
-        "writer": None,
-        "continue100": None,
-        "timer": aiohttp.helpers.TimerNoop(),
-        "request_info": request_info,
-        "traces": [],
-        "loop": loop,
-        "session": client,
-    }
-    if "stream_writer" in inspect.signature(aiohttp.ClientResponse).parameters:
-        # Required by aiohttp 3.14+. The bridged response has no socket writer,
-        # but ClientResponse uses this value to initialize its output size.
-        response_options["stream_writer"] = SimpleNamespace(output_size=0)
     response = client._response_class(
         request.method,
         request.url,
-        **response_options,
+        writer=None,
+        continue100=None,
+        timer=aiohttp.helpers.TimerNoop(),
+        request_info=request_info,
+        traces=[],
+        loop=loop,
+        session=client,
     )
     response.version = aiohttp.HttpVersion11
     response.status = payload.status_code

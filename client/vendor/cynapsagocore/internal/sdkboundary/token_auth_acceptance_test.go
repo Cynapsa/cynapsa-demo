@@ -19,6 +19,34 @@ func validTokenAuthArgs() string {
 	return `{"token":"` + boundaryEnrollmentToken + `","mesh_id":"mesh-one"}`
 }
 
+func TestForceEnrollmentFlagSurvivesTypedAndABITranslation(t *testing.T) {
+	adapter, _ := New()
+	for _, name := range []v1.CommandName{v1.CommandAuthTokenLogin, v1.CommandAuthTokenConnect} {
+		input := tokenAuthEnvelope(name, `{"token":"`+boundaryEnrollmentToken+`","mesh_id":"mesh-one","force_enroll":true}`)
+		internal, err := adapter.DecodeABIInternalCommand(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := takeFrozenCommandForTest(t, internal).Args.(model.TokenAuthArgs)
+		if !args.ForceEnroll {
+			t.Fatal("ABI force enrollment was lost")
+		}
+		public := v1.AuthTokenInput{Token: boundaryEnrollmentToken, MeshID: "mesh-one", ForceEnroll: true}
+		var command v1.Command = v1.AuthTokenLoginCommand{CommandBase: v1.CommandBase{CommandID: "forced", SDKSessionID: "session"}, Auth: public}
+		if name == v1.CommandAuthTokenConnect {
+			command = v1.AuthTokenConnectCommand{CommandBase: v1.CommandBase{CommandID: "forced", SDKSessionID: "session"}, Auth: public}
+		}
+		mapped, err := adapter.DecodeCommand(context.Background(), command)
+		if err != nil || !takeFrozenCommandForTest(t, mapped).Args.(model.TokenAuthArgs).ForceEnroll {
+			t.Fatalf("typed force enrollment was lost: %v", err)
+		}
+		invalid := tokenAuthEnvelope(name, `{"token":"`+boundaryEnrollmentToken+`","mesh_id":"mesh-one","force_enroll":"true"}`)
+		if _, err := adapter.DecodeABIInternalCommand(invalid); err == nil {
+			t.Fatal("string force_enroll accepted")
+		}
+	}
+}
+
 func tokenAuthEnvelope(name v1.CommandName, args string) []byte {
 	return []byte(`{"abi_version":1,"command_id":"command","command_name":` + strconv.Quote(string(name)) + `,"sdk_session_id":"session","args":` + args + `}`)
 }

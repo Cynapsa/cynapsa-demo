@@ -168,6 +168,14 @@ func (controller *SessionController) authenticate(ctx context.Context, services 
 }
 
 func (controller *SessionController) completeAuthentication(operation context.Context, services coreruntime.Services, command model.Command, auth Authentication, publicMeshEndpoint string, personality Personality) model.Result {
+	return controller.completeAuthenticationWithCommit(operation, services, command, auth, publicMeshEndpoint, personality, nil, nil)
+}
+
+// commitProfile runs after the new connection has authenticated but before
+// Runtime publishes ready. rollbackProfile restores the previous selection if
+// that final publication fails. Both callbacks perform local store operations
+// only; neither may perform network I/O while the lifecycle locks are held.
+func (controller *SessionController) completeAuthenticationWithCommit(operation context.Context, services coreruntime.Services, command model.Command, auth Authentication, publicMeshEndpoint string, personality Personality, commitProfile func() *ProviderError, rollbackProfile func() *ProviderError) model.Result {
 	graph, offload, failure := controller.buildGraph(operation, auth)
 	if failure != nil {
 		if graph != nil {
@@ -186,6 +194,7 @@ func (controller *SessionController) completeAuthentication(operation context.Co
 		}
 	}()
 
+	var profileFailure *ProviderError
 	commitFailure := invokeAuthenticatedCommit(services, operation, func(commitReady func() error) error {
 		controller.mu.Lock()
 		defer controller.mu.Unlock()
@@ -200,13 +209,23 @@ func (controller *SessionController) completeAuthentication(operation context.Co
 			OffloadAvailable: offload, Authenticated: true,
 		}
 		published := false
+		profileCommitted := false
 		defer func() {
 			if !published {
 				controller.graph = nil
 				controller.personality = PersonalityUnset
 				controller.snapshot = Snapshot{}
+				if profileCommitted && rollbackProfile != nil {
+					profileFailure = rollbackProfile()
+				}
 			}
 		}()
+		if commitProfile != nil {
+			if profileFailure = commitProfile(); profileFailure != nil {
+				return ErrAuthenticationFailed
+			}
+			profileCommitted = true
+		}
 		if err := commitReady(); err != nil {
 			return ErrAuthenticationFailed
 		}
@@ -215,6 +234,9 @@ func (controller *SessionController) completeAuthentication(operation context.Co
 		return nil
 	})
 	if !committed {
+		if profileFailure != nil {
+			return providerFailure(command, "auth", profileFailure)
+		}
 		return providerFailure(command, "auth", classifyCommitError(operation, commitFailure))
 	}
 	return success(command, model.AuthResult{

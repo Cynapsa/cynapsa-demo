@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -156,6 +157,46 @@ func TestPublicLocalDeliveryControlsShareOneAuthoritativeQueue(t *testing.T) {
 	queue, ok = status.Result.(v1.DeliveryQueueStatus)
 	if !ok || queue.Queued != 0 || queue.Paused {
 		t.Fatalf("empty queue = %#v", status.Result)
+	}
+}
+
+func TestDefaultApplicationPolicyAllowsAllUntilReplaced(t *testing.T) {
+	core := newStartedLocalControlCore(t, 4)
+	defer destroyLocalControlCore(t, core)
+
+	defaultRules := []v1.PolicyRule{{Action: v1.PolicyActionAllow}}
+	got := requireLocalCompletion(t, core, v1.PolicyGetCommand{CommandBase: localCommandBase("default-policy-get")})
+	result, ok := got.Result.(v1.PolicyResult)
+	if !ok || !reflect.DeepEqual(result.Rules, defaultRules) {
+		t.Fatalf("default policy = %#v, want %#v", got.Result, defaultRules)
+	}
+
+	for targetIndex, target := range []string{"agent-a@example.test", "agent-b@example.test"} {
+		for pathIndex, path := range []string{"/ask", "/reverse"} {
+			allowed := requireLocalCompletion(t, core, v1.PolicyTestCommand{
+				CommandBase: localCommandBase("default-policy-test-" + strconv.Itoa(targetIndex*2+pathIndex)),
+				Input: v1.PolicyTestInput{To: v1.AgentID(target), Payload: v1.Payload{Value: v1.NativePayload{
+					ContentType: "application/json", Path: path, Body: []byte(`{"message":"hello"}`),
+				}}},
+			})
+			tested, ok := allowed.Result.(v1.PolicyResult)
+			if !ok || !tested.Allowed {
+				t.Fatalf("default policy denied %s %s: %#v", target, path, allowed.Result)
+			}
+		}
+	}
+
+	narrow := []v1.PolicyRule{{Action: v1.PolicyActionAllow, Path: "/ask", AgentID: "agent-a@example.test"}}
+	requireLocalCompletion(t, core, v1.PolicySetCommand{CommandBase: localCommandBase("replace-default-policy"), Rules: narrow})
+	denied := requireLocalCompletion(t, core, v1.PolicyTestCommand{
+		CommandBase: localCommandBase("replaced-policy-test"),
+		Input: v1.PolicyTestInput{To: "agent-b@example.test", Payload: v1.Payload{Value: v1.NativePayload{
+			ContentType: "application/json", Path: "/ask", Body: []byte(`{"message":"hello"}`),
+		}}},
+	})
+	tested, ok := denied.Result.(v1.PolicyResult)
+	if !ok || tested.Allowed {
+		t.Fatalf("replacement policy did not deny unrelated agent: %#v", denied.Result)
 	}
 }
 

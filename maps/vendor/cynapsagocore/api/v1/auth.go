@@ -32,6 +32,9 @@ type AuthTokenInput struct {
 	// ProfileID selects a process-local installation namespace. Empty retains
 	// the legacy default profile. It is never an authorization identity.
 	ProfileID string
+	// ForceEnroll creates a fresh installation from Token instead of using a
+	// cached installation for the selected profile.
+	ForceEnroll bool
 }
 
 // AuthInstallationInput selects an already-enrolled local installation and

@@ -217,7 +217,7 @@ func freezeCommandArgs(input CommandArgs, total *int64, clone bool) (CommandArgs
 		return ConfigUpdateArgs{CommandTimeout: freezeDuration(value.CommandTimeout, total, clone), RPCTimeout: freezeDuration(value.RPCTimeout, total, clone), QueueLimit: freezeUint32(value.QueueLimit, total, clone), PayloadLimit: freezeUint64(value.PayloadLimit, total, clone)}, true
 	case TokenAuthArgs:
 		addTypeBytes[TokenAuthArgs](total)
-		return TokenAuthArgs{Token: freezeBytes(value.Token, total, clone), MeshID: freezeString(value.MeshID, total, clone), ProfileID: freezeString(value.ProfileID, total, clone)}, true
+		return TokenAuthArgs{Token: freezeBytes(value.Token, total, clone), MeshID: freezeString(value.MeshID, total, clone), ProfileID: freezeString(value.ProfileID, total, clone), ForceEnroll: value.ForceEnroll}, true
 	case InstallationAuthArgs:
 		addTypeBytes[InstallationAuthArgs](total)
 		return InstallationAuthArgs{ProfileID: freezeString(value.ProfileID, total, clone), MeshID: freezeString(value.MeshID, total, clone)}, true

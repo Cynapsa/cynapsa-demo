@@ -31,6 +31,9 @@ type profileCredentialSource struct {
 	random    io.Reader
 	profileID string
 	meshID    string
+	// installationID binds this source to the graph that created it. A later
+	// force enrollment must never lend its replacement JWT to an old session.
+	installationID string
 
 	mu          sync.Mutex
 	renewMu     sync.Mutex
@@ -50,6 +53,9 @@ func (controller *SessionController) tokenAuthHandler(personality Personality) c
 		}
 		defer controller.finishSelection()
 		defer cancel()
+		if args.ForceEnroll {
+			return controller.forceTokenAuthentication(operation, services, command, personality, args), nil
+		}
 
 		bundle, usableUntil, source, prepare, failure := controller.acquireProfileCredential(operation, args.Token, args.ProfileID, args.MeshID)
 		if failure != nil {
@@ -77,6 +83,224 @@ func (controller *SessionController) tokenAuthHandler(personality Personality) c
 		}
 		return result, nil
 	}
+}
+
+// Force enrollment retains the prior active profile until a new installation
+// has enrolled and authenticated. The pending profile is durable so a failed
+// network login can retry the same server-side installation instead of
+// consuming another enrollment-grant slot.
+func (controller *SessionController) forceTokenAuthentication(ctx context.Context, services coreruntime.Services, command model.Command, personality Personality, args model.TokenAuthArgs) model.Result {
+	store, ok := controller.enrollmentState.(enrollment.ProfileStore)
+	if !ok {
+		return providerFailure(command, "auth", &ProviderError{Code: ProviderUnavailable})
+	}
+	// A force attempt owns the pending installation until it either publishes
+	// the replacement or fails. The separate per-profile lease rejects a
+	// concurrent attempt without holding the ordinary profile writer lock
+	// across enrollment or transport authentication.
+	release, acquired, err := store.TryLockForceProfile(ctx, args.ProfileID)
+	if err != nil {
+		return providerFailure(command, "auth", &ProviderError{Code: ProviderInternal})
+	}
+	if !acquired {
+		return providerFailure(command, "auth", &ProviderError{Code: ProviderRejected})
+	}
+	defer release()
+	active, found, err := store.LoadProfile(ctx, args.ProfileID)
+	if err != nil {
+		return providerFailure(command, "auth", &ProviderError{Code: ProviderInternal})
+	}
+	defer active.Clear()
+	priorInstallationID := ""
+	if found {
+		priorInstallationID = active.InstallationID
+	}
+	pendingID, err := enrollment.ForcePendingProfileID(args.ProfileID)
+	if err != nil {
+		return providerFailure(command, "auth", &ProviderError{Code: ProviderInternal})
+	}
+	pending, failure := controller.reserveForcePendingProfile(ctx, store, pendingID, priorInstallationID, active.AgentID)
+	if failure != nil {
+		return providerFailure(command, "auth", failure)
+	}
+	defer pending.Clear()
+	bundle, failure := controller.enrollProfileInstallation(ctx, args.Token, pending, args.MeshID)
+	if failure != nil {
+		return providerFailure(command, "auth", failure)
+	}
+	defer bundle.Clear()
+	if found && active.AgentID != "" && active.AgentID != bundle.AgentID {
+		// The supplied token belongs to a different logical agent. This
+		// pending installation may already be bound to that agent at the
+		// enrollment service, so it cannot be reused for the next token.
+		if _, rotateFailure := controller.rotateForcePendingProfile(ctx, store, pendingID, pending.InstallationID); rotateFailure != nil {
+			return providerFailure(command, "auth", rotateFailure)
+		}
+		return providerFailure(command, "auth", &ProviderError{Code: ProviderAuthenticationRejected})
+	}
+	usableUntil, failure := persistProfileCredential(ctx, store, controller.clock.Now().UTC(), &pending, bundle)
+	if failure != nil {
+		return providerFailure(command, "auth", failure)
+	}
+	source := &profileCredentialSource{store: store, provider: controller.enroll, clock: controller.clock,
+		random: controller.random, profileID: pendingID, meshID: args.MeshID, installationID: pending.InstallationID}
+	password := append([]byte(nil), bundle.AccessToken...)
+	defer clear(password)
+	resource := ""
+	if bundle.Version == "e2" {
+		resource = bundle.SessionResource
+	}
+	var promotedByThisAttempt bool
+	var displaced enrollment.Profile
+	defer displaced.Clear()
+	result := controller.completeAuthenticationWithCommit(ctx, services, command, Authentication{
+		MeshEndpoint: bundle.MeshEndpoint, Username: bundle.Username, Password: password,
+		MeshID: bundle.MeshID, AgentInstanceID: bundle.InstallationID,
+		SessionResource: resource, TokenAuthentication: true, CredentialUsableUntil: usableUntil,
+		CredentialSource: source, SessionExpiryMode: bundle.SessionExpiryMode,
+		ProfileID: args.ProfileID, OfflineStartDeadline: usableUntil.Add(-credentialSafetyMargin),
+		OfflineColdStartTargetSeconds: bundle.OfflineColdStartTargetSeconds,
+		OfflineTargetSatisfied:        offlineTargetSatisfied(bundle, usableUntil, controller.clock.Now().UTC()),
+		PolicyRevision:                bundle.PolicyRevision, PreparationStatus: preparationStatus(bundle, false),
+	}, "", personality, func() *ProviderError {
+		var failure *ProviderError
+		displaced, promotedByThisAttempt, failure = promoteForceProfile(ctx, store, active, found, priorInstallationID, pending, args.ProfileID)
+		if failure != nil {
+			return failure
+		}
+		// The first connection reads pending; subsequent reconnects use the
+		// newly promoted active profile.
+		source.mu.Lock()
+		source.profileID = args.ProfileID
+		source.mu.Unlock()
+		return nil
+	}, func() *ProviderError {
+		if !promotedByThisAttempt {
+			return nil
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), controller.profile.ReconnectOperationTimeout)
+		defer cancel()
+		failure := rollbackForceProfile(cleanup, store, displaced, displaced.InstallationID != "", pending, args.ProfileID)
+		source.mu.Lock()
+		source.profileID = pendingID
+		source.mu.Unlock()
+		return failure
+	})
+	if result.Err == nil {
+		controller.startCredentialWorker(source, false)
+	}
+	return result
+}
+
+func (controller *SessionController) reserveForcePendingProfile(ctx context.Context, store enrollment.ProfileStore, pendingID, priorInstallationID, priorAgentID string) (enrollment.Profile, *ProviderError) {
+	for attempt := 0; attempt < 4; attempt++ {
+		candidate, failure := controller.newForcePendingProfile(pendingID)
+		if failure != nil {
+			return enrollment.Profile{}, failure
+		}
+		pending, _, err := store.LoadOrCreateProfile(ctx, candidate)
+		candidate.Clear()
+		if err != nil {
+			return enrollment.Profile{}, &ProviderError{Code: ProviderInternal}
+		}
+		if pending.InstallationID != priorInstallationID && (priorAgentID == "" || pending.AgentID == "" || pending.AgentID == priorAgentID) {
+			return pending, nil
+		}
+		installedID := pending.InstallationID
+		pending.Clear()
+		if _, failure := controller.rotateForcePendingProfile(ctx, store, pendingID, installedID); failure != nil {
+			return enrollment.Profile{}, failure
+		}
+	}
+	return enrollment.Profile{}, &ProviderError{Code: ProviderUnavailable}
+}
+
+func (controller *SessionController) newForcePendingProfile(profileID string) (enrollment.Profile, *ProviderError) {
+	installationID, secret, err := enrollment.GenerateInstallation(controller.random)
+	if err != nil {
+		return enrollment.Profile{}, &ProviderError{Code: ProviderInternal}
+	}
+	return enrollment.Profile{Version: enrollment.ProfileStateVersion, ProfileID: profileID,
+		InstallationID: installationID, InstallationSecret: secret,
+		Credentials: make(map[string]enrollment.Credential)}, nil
+}
+
+func (controller *SessionController) rotateForcePendingProfile(ctx context.Context, store enrollment.ProfileStore, pendingID, installedID string) (bool, *ProviderError) {
+	replacement, failure := controller.newForcePendingProfile(pendingID)
+	if failure != nil {
+		return false, failure
+	}
+	defer replacement.Clear()
+	swapped, err := store.CompareAndSwapProfile(ctx, pendingID, installedID, replacement)
+	if err != nil {
+		return false, &ProviderError{Code: ProviderInternal}
+	}
+	return swapped, nil
+}
+
+func promoteForceProfile(ctx context.Context, store enrollment.ProfileStore, old enrollment.Profile, found bool, priorID string, pending enrollment.Profile, profileID string) (enrollment.Profile, bool, *ProviderError) {
+	active := pending.Clone()
+	active.ProfileID = profileID
+	defer active.Clear()
+	previous, swapped, err := store.SwapProfileWithPrevious(ctx, profileID, priorID, active)
+	if err != nil {
+		// A file write can fail after atomic rename (for example at directory
+		// sync). Resolve its outcome before reporting a failed authentication.
+		// The operation context may already be cancelled, so use bounded local
+		// cleanup time to inspect and, if necessary, restore the old profile.
+		// If the store captured a prior profile before the uncertain write, use
+		// that exact copy rather than the possibly stale initial snapshot.
+		rollbackProfile, rollbackFound := old, found
+		if previous.InstallationID != "" {
+			rollbackProfile, rollbackFound = previous, true
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		current, currentFound, loadErr := store.LoadProfile(cleanup, profileID)
+		changedToPending := loadErr == nil && currentFound && current.InstallationID == pending.InstallationID
+		current.Clear()
+		if changedToPending {
+			_ = rollbackForceProfile(cleanup, store, rollbackProfile, rollbackFound, pending, profileID)
+		}
+		previous.Clear()
+		return enrollment.Profile{}, false, &ProviderError{Code: ProviderInternal}
+	}
+	if !swapped {
+		previous.Clear()
+		// A changed active profile is a conflicting mutation, not our success.
+		return enrollment.Profile{}, false, &ProviderError{Code: ProviderInternal}
+	}
+	return previous, true, nil
+}
+
+func rollbackForceProfile(ctx context.Context, store enrollment.ProfileStore, old enrollment.Profile, found bool, pending enrollment.Profile, profileID string) *ProviderError {
+	for attempt := 0; attempt < 2; attempt++ {
+		var swapped bool
+		if found {
+			replacement := old.Clone()
+			// A post-rename error can still mean rollback succeeded; resolve
+			// every non-success path by loading the resulting active profile.
+			swapped, _ = store.CompareAndSwapProfile(ctx, profileID, pending.InstallationID, replacement)
+			replacement.Clear()
+		} else {
+			swapped, _ = store.CompareAndDeleteProfile(ctx, profileID, pending.InstallationID)
+		}
+		if swapped {
+			return nil
+		}
+		current, currentFound, err := store.LoadProfile(ctx, profileID)
+		matchesOld := err == nil && currentFound == found && (!found ||
+			(current.InstallationID == old.InstallationID && bytes.Equal(current.InstallationSecret, old.InstallationSecret)))
+		stillPending := err == nil && currentFound && current.InstallationID == pending.InstallationID
+		current.Clear()
+		if matchesOld {
+			return nil
+		}
+		if !stillPending {
+			break
+		}
+	}
+	return &ProviderError{Code: ProviderInternal}
 }
 
 func (controller *SessionController) installationAuthHandler(personality Personality) coreruntime.Handler {
@@ -141,13 +365,18 @@ func (controller *SessionController) acquireProfileCredential(ctx context.Contex
 			return enrollment.Bundle{}, time.Time{}, nil, false, &ProviderError{Code: ProviderInternal}
 		}
 		if legacyFound {
-			profile = profileFromLegacy(profileID, legacy)
+			candidate := profileFromLegacy(profileID, legacy)
 			legacy.Clear()
-			if err = saveAndVerifyProfile(ctx, store, profile); err != nil {
+			var created bool
+			profile, created, err = store.LoadOrCreateProfile(ctx, candidate)
+			candidate.Clear()
+			if err != nil {
 				return enrollment.Bundle{}, time.Time{}, nil, false, &ProviderError{Code: ProviderInternal}
 			}
-			if err = store.DeleteLegacy(ctx, token, meshID); err != nil {
-				return enrollment.Bundle{}, time.Time{}, nil, false, &ProviderError{Code: ProviderInternal}
+			if created {
+				if err = store.DeleteLegacy(ctx, token, meshID); err != nil {
+					return enrollment.Bundle{}, time.Time{}, nil, false, &ProviderError{Code: ProviderInternal}
+				}
 			}
 			found = true
 		}
@@ -160,12 +389,14 @@ func (controller *SessionController) acquireProfileCredential(ctx context.Contex
 		if generateErr != nil {
 			return enrollment.Bundle{}, time.Time{}, nil, false, &ProviderError{Code: ProviderInternal}
 		}
-		profile = enrollment.Profile{Version: enrollment.ProfileStateVersion, ProfileID: profileID, InstallationID: installationID, InstallationSecret: secret, Credentials: make(map[string]enrollment.Credential)}
-		if err = saveAndVerifyProfile(ctx, store, profile); err != nil {
+		candidate := enrollment.Profile{Version: enrollment.ProfileStateVersion, ProfileID: profileID, InstallationID: installationID, InstallationSecret: secret, Credentials: make(map[string]enrollment.Credential)}
+		profile, _, err = store.LoadOrCreateProfile(ctx, candidate)
+		candidate.Clear()
+		if err != nil {
 			return enrollment.Bundle{}, time.Time{}, nil, false, &ProviderError{Code: ProviderInternal}
 		}
 	}
-	source := &profileCredentialSource{store: store, provider: controller.enroll, clock: controller.clock, random: controller.random, profileID: profileID, meshID: meshID}
+	source := &profileCredentialSource{store: store, provider: controller.enroll, clock: controller.clock, random: controller.random, profileID: profileID, meshID: meshID, installationID: profile.InstallationID}
 	now := controller.clock.Now().UTC()
 	if credential, exists := profile.Credentials[meshID]; exists && now.Before(credential.UsableUntil) {
 		return cloneEnrollmentBundle(credential.Bundle), credential.UsableUntil, source, credentialNeedsPreparation(credential, now), nil
@@ -200,19 +431,6 @@ func profileFromLegacy(profileID string, state enrollment.State) enrollment.Prof
 	return profile
 }
 
-func saveAndVerifyProfile(ctx context.Context, store enrollment.ProfileStore, profile enrollment.Profile) error {
-	if err := store.SaveProfile(ctx, profile); err != nil {
-		return err
-	}
-	readback, found, err := store.LoadProfile(ctx, profile.ProfileID)
-	if err != nil || !found || readback.InstallationID != profile.InstallationID || !bytes.Equal(readback.InstallationSecret, profile.InstallationSecret) {
-		readback.Clear()
-		return enrollment.ErrState
-	}
-	readback.Clear()
-	return nil
-}
-
 func persistProfileCredential(ctx context.Context, store enrollment.ProfileStore, receivedAt time.Time, profile *enrollment.Profile, bundle enrollment.Bundle) (time.Time, *ProviderError) {
 	usableUntil, err := enrollment.UsableUntil(bundle.AccessToken, receivedAt, bundle.ExpiresIn)
 	if err != nil || !receivedAt.Before(usableUntil) || profile == nil || bundle.InstallationID != profile.InstallationID || (profile.AgentID != "" && profile.AgentID != bundle.AgentID) {
@@ -230,8 +448,14 @@ func persistProfileCredential(ctx context.Context, store enrollment.ProfileStore
 	cached.Wrapper = nil
 	cached.Display = ""
 	profile.Credentials[bundle.MeshID] = enrollment.Credential{Bundle: cached, ReceivedAt: receivedAt, UsableUntil: usableUntil}
-	if err = saveAndVerifyProfile(ctx, store, *profile); err != nil {
+	swapped, err := store.CompareAndSwapProfile(ctx, profile.ProfileID, profile.InstallationID, *profile)
+	if err != nil {
 		return time.Time{}, &ProviderError{Code: ProviderInternal}
+	}
+	if !swapped {
+		// A force enrollment replaced this installation while enrollment or
+		// renewal was in flight. Never resurrect its stale credential cache.
+		return time.Time{}, &ProviderError{Code: ProviderAuthenticationRejected}
 	}
 	return usableUntil, nil
 }
@@ -392,15 +616,19 @@ func (source *profileCredentialSource) Snapshot(ctx context.Context) (Credential
 	}
 	source.mu.Lock()
 	denied := source.denied
+	profileID := source.profileID
 	source.mu.Unlock()
 	if denied {
 		return CredentialSnapshot{}, &ProviderError{Code: ProviderAuthenticationRejected}
 	}
-	profile, found, err := source.store.LoadProfile(ctx, source.profileID)
+	profile, found, err := source.store.LoadProfile(ctx, profileID)
 	if err != nil || !found {
 		return CredentialSnapshot{}, &ProviderError{Code: ProviderInternal}
 	}
 	defer profile.Clear()
+	if profile.InstallationID != source.installationID {
+		return CredentialSnapshot{}, &ProviderError{Code: ProviderAuthenticationRejected}
+	}
 	credential, found := profile.Credentials[source.meshID]
 	if !found || !source.clock.Now().UTC().Before(credential.UsableUntil) {
 		return CredentialSnapshot{}, &ProviderError{Code: ProviderAuthenticationRejected}
@@ -456,6 +684,12 @@ func (source *profileCredentialSource) nextDelay(immediate bool, backoff time.Du
 		return backoff
 	}
 	defer profile.Clear()
+	if profile.InstallationID != source.installationID {
+		// Promotion is provisional until Runtime publishes ready. A failed
+		// publication can restore this installation, so retry later rather
+		// than permanently denying the old source.
+		return backoff
+	}
 	credential, found := profile.Credentials[source.meshID]
 	if !found {
 		return backoff
@@ -503,6 +737,9 @@ func (source *profileCredentialSource) renew(ctx context.Context) (bool, bool) {
 		return false, false
 	}
 	defer profile.Clear()
+	if profile.InstallationID != source.installationID {
+		return false, false
+	}
 	provider, v2 := source.provider.(enrollment.V2Provider)
 	legacy, v1 := source.provider.(enrollment.RenewalProvider)
 	if !v2 && !v1 {
@@ -556,6 +793,12 @@ func (source *profileCredentialSource) renew(ctx context.Context) (bool, bool) {
 		return false, true
 	}
 	_, providerFailure := persistProfileCredential(ctx, source.store, source.clock.Now().UTC(), &profile, bundle)
+	if providerFailure != nil && providerFailure.Code == ProviderAuthenticationRejected {
+		// A local installation-ID CAS can lose to provisional force
+		// promotion. Retry after that transaction settles; only a server
+		// rejection above is a terminal credential denial.
+		return false, false
+	}
 	if providerFailure == nil {
 		now := source.clock.Now().UTC()
 		credential := profile.Credentials[source.meshID]

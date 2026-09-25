@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import threading
@@ -11,40 +12,43 @@ from runtime import prepare_runtime
 prepare_runtime()
 
 import cynapsa
-from google import genai
-from google.genai import types
 
+from llm import ModelClient, ModelError
 from places import GooglePlaces, PlacesError
-from runtime import connection_options, gemini_key, google_maps_key
+from runtime import connection_options, google_maps_key, litellm_key
 
 
 LOG = logging.getLogger(__name__)
-MODEL = os.environ.get("DEMO_GEMINI_MODEL", "gemini-3.1-flash-lite")
-MAX_OUTPUT_TOKENS = 512
-TOOLS = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="search_places",
-            description="Search Google Places for businesses, landmarks, or addresses.",
-            parameters_json_schema={
+MODEL = os.environ.get("LITELLM_MODEL", "gpt-5.6-terra-high")
+BASE_URL = os.environ.get("LITELLM_BASE_URL", "https://litellm.eladrave.com")
+TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_places",
+            "description": "Search Google Places for businesses, landmarks, or addresses.",
+            "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
                 "required": ["query"],
                 "additionalProperties": False,
             },
-        ),
-        types.FunctionDeclaration(
-            name="get_place_details",
-            description="Get details for a place ID returned by search_places.",
-            parameters_json_schema={
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_place_details",
+            "description": "Get details for a place ID returned by search_places.",
+            "parameters": {
                 "type": "object",
                 "properties": {"place_id": {"type": "string"}},
                 "required": ["place_id"],
                 "additionalProperties": False,
             },
-        ),
-    ]
-)
+        },
+    },
+]
 INSTRUCTIONS = (
     "You are a Google Maps specialist. Use the Places tools for place-specific "
     "answers. Never invent a place, address, rating, opening hour, or travel time. "
@@ -53,74 +57,92 @@ INSTRUCTIONS = (
 )
 
 
-def _model_content(response: Any) -> Any:
-    candidates = getattr(response, "candidates", None)
-    if not candidates or getattr(candidates[0], "content", None) is None:
-        raise RuntimeError("Gemini returned no candidate content")
-    return candidates[0].content
+def _invalid_tool_request(round_index: int, call_index: int | None, reason: str) -> cynapsa.RPCException:
+    # Keep the remote error stable. Only emit a bounded diagnostic category;
+    # prompts, tool arguments, and place IDs can contain user-private data.
+    LOG.warning(
+        "Maps tool call rejected: round=%s call=%s reason=%s",
+        round_index + 1,
+        call_index + 1 if call_index is not None else "none",
+        reason,
+    )
+    return cynapsa.RPCException(
+        502, code="maps_tool_error", detail="The maps tool request was invalid"
+    )
 
 
-def answer_question(question: str, client: genai.Client, places: GooglePlaces) -> dict[str, Any]:
-    history: list[Any] = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
+def answer_question(question: str, client: ModelClient, places: GooglePlaces) -> dict[str, Any]:
+    history: list[dict[str, Any]] = [
+        {"role": "developer", "content": INSTRUCTIONS},
+        {"role": "user", "content": question},
+    ]
     known_ids: set[str] = set()
     sources: list[dict[str, Any]] = []
-    tool_mode = types.FunctionCallingConfigMode.ANY
-    for _ in range(3):
-        result = client.models.generate_content(
-            model=MODEL,
-            contents=history,
-            config=types.GenerateContentConfig(
-                system_instruction=INSTRUCTIONS,
-                tools=[TOOLS],
-                tool_config=types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(mode=tool_mode)
-                ),
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                thinking_config=types.ThinkingConfig(thinking_level="minimal"),
-                max_output_tokens=MAX_OUTPUT_TOKENS,
-            ),
+    for round_index in range(3):
+        result = client.complete(
+            history, tools=TOOLS, tool_choice="required" if round_index == 0 else "auto"
         )
-        calls = list(result.function_calls or [])
+        calls = result.get("tool_calls") or []
+        if not isinstance(calls, list):
+            raise _invalid_tool_request(round_index, None, "invalid_call_list")
+        if len(calls) > 10:
+            raise _invalid_tool_request(round_index, None, "too_many_calls")
         if not calls:
-            answer = (result.text or "").strip()
+            if round_index == 0:
+                raise _invalid_tool_request(round_index, None, "missing_initial_tool_call")
+            answer = result.get("content")
+            answer = answer.strip() if isinstance(answer, str) else ""
             if answer:
                 unique = list({source["google_maps_url"]: source for source in sources}.values())
                 return {"answer": answer, "sources": unique, "attribution": "Google Maps"}
             break
-        history.append(_model_content(result))
-        function_results = []
-        for call in calls:
+        history.append({"role": "assistant", "content": result.get("content"), "tool_calls": calls})
+        for call_index, call in enumerate(calls):
+            reason = "invalid_call_shape"
             try:
-                args = dict(call.args or {})
-                if call.name == "search_places":
+                if not isinstance(call, dict):
+                    raise ValueError("invalid function call")
+                function = call["function"]
+                if (not isinstance(function, dict) or not isinstance(call.get("id"), str)
+                        or not call["id"]):
+                    raise ValueError("invalid function call")
+                reason = "invalid_arguments_json"
+                args = json.loads(function["arguments"])
+                reason = "arguments_not_object"
+                if not isinstance(args, dict):
+                    raise ValueError("invalid function arguments")
+                if function.get("name") == "search_places":
+                    reason = "invalid_search_query"
                     tool_result = places.search(args["query"])
+                    reason = "invalid_search_result"
                     for place in tool_result["places"]:
                         if isinstance(place.get("id"), str):
                             known_ids.add(place["id"])
                         if place.get("google_maps_url"):
                             sources.append(place)
-                elif call.name == "get_place_details":
+                elif function.get("name") == "get_place_details":
+                    reason = "missing_place_id"
                     place_id = args["place_id"]
-                    if place_id not in known_ids:
+                    reason = "place_id_not_from_search"
+                    if not isinstance(place_id, str) or place_id not in known_ids:
                         raise ValueError("place ID must come from a prior search")
+                    reason = "invalid_place_id"
                     tool_result = places.details(place_id)
                     if tool_result.get("google_maps_url"):
                         sources.append(tool_result)
                 else:
+                    reason = "unknown_tool"
                     raise ValueError("unknown tool")
             except PlacesError:
                 raise cynapsa.RPCException(
                     502, code="places_unavailable", detail="Google Places is unavailable"
                 ) from None
             except (KeyError, TypeError, ValueError):
-                raise cynapsa.RPCException(
-                    502, code="maps_tool_error", detail="The maps tool request was invalid"
-                ) from None
-            function_results.append(types.Part(function_response=types.FunctionResponse(
-                id=call.id, name=call.name, response={"result": tool_result}
-            )))
-        history.append(types.Content(role="user", parts=function_results))
-        tool_mode = types.FunctionCallingConfigMode.AUTO
+                raise _invalid_tool_request(round_index, call_index, reason) from None
+            history.append({
+                "role": "tool", "tool_call_id": call["id"],
+                "content": json.dumps({"result": tool_result}),
+            })
     raise cynapsa.RPCException(
         502, code="maps_no_answer", detail="The maps agent could not finish an answer"
     )
@@ -129,14 +151,13 @@ def answer_question(question: str, client: genai.Client, places: GooglePlaces) -
 def main() -> None:
     parser = argparse.ArgumentParser(description="Cynapsa Google Maps agent")
     parser.add_argument("--enroll", action="store_true")
+    parser.add_argument("--force-enroll", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    model_client = genai.Client(
-        api_key=gemini_key(), http_options=types.HttpOptions(timeout=20_000)
-    )
+    model_client = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
     places = GooglePlaces(google_maps_key())
     try:
-        with cynapsa.connect(**connection_options(enroll=args.enroll)) as session:
+        with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session:
             @session.on("*")
             def receive(request: cynapsa.CynapsaRequest) -> dict:
                 try:
@@ -151,6 +172,11 @@ def main() -> None:
                     ) from None
                 except cynapsa.RPCException:
                     raise
+                except ModelError as exc:
+                    LOG.warning("Model gateway request failed with status %s", exc.status_code)
+                    raise cynapsa.RPCException(
+                        503, code="model_unavailable", detail="The model gateway is unavailable"
+                    ) from None
                 except Exception as exc:
                     LOG.warning("Maps request failed: %s", type(exc).__name__)
                     raise cynapsa.RPCException(
@@ -161,6 +187,9 @@ def main() -> None:
             threading.Event().wait()
     except KeyboardInterrupt:
         pass
+    except cynapsa.NativeError as exc:
+        LOG.error("Maps connection failed: %r", exc)
+        raise
     finally:
         places.close()
         model_client.close()

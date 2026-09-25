@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from email.message import Message
 from http import HTTPStatus
+from types import SimpleNamespace
 from typing import Any, NoReturn
 from urllib.parse import quote, urljoin, urlsplit
 
@@ -1355,16 +1356,23 @@ def _aiohttp_response(
         request.url,
     )
     loop = asyncio.get_running_loop()
+    response_options = {
+        "writer": None,
+        "continue100": None,
+        "timer": aiohttp.helpers.TimerNoop(),
+        "request_info": request_info,
+        "traces": [],
+        "loop": loop,
+        "session": client,
+    }
+    if "stream_writer" in inspect.signature(aiohttp.ClientResponse).parameters:
+        # Required by aiohttp 3.14+. The bridged response has no socket writer,
+        # but ClientResponse uses this value to initialize its output size.
+        response_options["stream_writer"] = SimpleNamespace(output_size=0)
     response = client._response_class(
         request.method,
         request.url,
-        writer=None,
-        continue100=None,
-        timer=aiohttp.helpers.TimerNoop(),
-        request_info=request_info,
-        traces=[],
-        loop=loop,
-        session=client,
+        **response_options,
     )
     response.version = aiohttp.HttpVersion11
     response.status = payload.status_code
@@ -2081,6 +2089,7 @@ def _validated_login(
     username: object,
     password: object,
     enrollment_token: object,
+    force_enroll: object,
     profile_id: object,
     mesh_id: object,
     address_map: object,
@@ -2097,6 +2106,7 @@ def _validated_login(
         username=username,
         password=password,
         enrollment_token=enrollment_token,
+        force_enroll=force_enroll,
         profile_id=profile_id,
         mesh_id=mesh_id,
         command_timeout_ms=command_timeout_ms,
@@ -2117,6 +2127,7 @@ def login(
     username: str | None = None,
     password: str | None = None,
     enrollment_token: str | None = None,
+    force_enroll: bool = False,
     profile_id: str = "default",
     asgi_app: object | None = None,
     command_timeout_ms: int = 0,
@@ -2135,6 +2146,7 @@ def login(
             username=username,
             password=password,
             enrollment_token=enrollment_token,
+            force_enroll=force_enroll,
             profile_id=profile_id,
             mesh_id=mesh_id,
             address_map=address_map,
@@ -2171,6 +2183,7 @@ async def login_async(
     username: str | None = None,
     password: str | None = None,
     enrollment_token: str | None = None,
+    force_enroll: bool = False,
     profile_id: str = "default",
     asgi_app: object | None = None,
     command_timeout_ms: int = 0,
@@ -2189,6 +2202,7 @@ async def login_async(
             username=username,
             password=password,
             enrollment_token=enrollment_token,
+            force_enroll=force_enroll,
             profile_id=profile_id,
             mesh_id=mesh_id,
             address_map=address_map,

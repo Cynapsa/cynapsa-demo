@@ -185,6 +185,23 @@ def test_token_auth_vectors_are_strict_and_do_not_leak_secrets(name: str) -> Non
     assert command_id == "command-1"
     assert json.loads(encoded)["args"] == {"token": token, "mesh_id": "mesh-one"}
 
+    _, forced = encode_command(
+        name,
+        "session-1",
+        {"token": token, "mesh_id": "mesh-one", "force_enroll": True},
+        command_id="command-2",
+    )
+    assert json.loads(forced)["args"] == {
+        "token": token, "mesh_id": "mesh-one", "force_enroll": True
+    }
+    for invalid_force in (None, 1, "true"):
+        with pytest.raises(NativeError) as raised:
+            encode_command(
+                name, "session-1",
+                {"token": token, "mesh_id": "mesh-one", "force_enroll": invalid_force},
+            )
+        assert raised.value.code == "invalid_input"
+
     for invalid in (token.removeprefix("cpsa_"), token + "x", token.upper()):
         with pytest.raises(NativeError) as raised:
             encode_command(

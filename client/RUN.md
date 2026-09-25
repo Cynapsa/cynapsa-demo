@@ -12,7 +12,7 @@ directory and built into its image.
 - Git
 - Docker Desktop, running before you start the client
 - A client agent in the `cynapsa-demo` mesh
-- A fresh enrollment token for that client agent
+- An active enrollment token for that client agent
 
 Treat the token like a password. Never commit `.env` or paste the token into a
 tracked repository file.
@@ -64,6 +64,15 @@ cd /path/to/cynapsa-demo/client
 ./run.sh
 ```
 
+If this client's installation was revoked when its agent was removed from the
+mesh, re-add the agent, supply a still-valid token, and run
+`./run.sh --force-enroll`. This runs `cynapsa run --force-enroll` against the
+same Docker volume, then starts the native client from the replaced profile.
+Later ordinary runs use
+the same volume. The bundled SDK/Core source matches the reviewer-approved source;
+no image was built during this sync. Use `./run.sh --build` once if the image
+tag already exists; retries reuse the image.
+
 ## Rebuild the image
 
 ```sh
@@ -96,6 +105,6 @@ does not delete the agent in the Cynapsa portal.
 - `Docker is required`: install Docker Desktop.
 - `Docker is not running`: start Docker Desktop and wait until it is ready.
 - `an enrollment token is required`: set `CYNAPSA_TOKEN` in `.env` or the shell.
-- Enrollment fails: generate a fresh token; enrollment tokens are intended for
-  first-time use and belong to one identity.
+- Enrollment fails: check the token's status, mesh scope, expiry, and
+  active-installation limit. A grant can be reused when those rules allow it.
 - To force a fresh local image build, run `./run.sh --build`.

@@ -785,7 +785,7 @@ func decodeTokenAuth(base v1.CommandBase, input v1.AuthTokenInput) (v1.CommandBa
 		clear(bare)
 		return v1.CommandBase{}, nil, malformed("profile_id")
 	}
-	return base, model.TokenAuthArgs{Token: bare, MeshID: string(input.MeshID), ProfileID: profileID}, nil
+	return base, model.TokenAuthArgs{Token: bare, MeshID: string(input.MeshID), ProfileID: profileID, ForceEnroll: input.ForceEnroll}, nil
 }
 
 func decodeInstallationAuth(base v1.CommandBase, input v1.AuthInstallationInput) (v1.CommandBase, model.CommandArgs, error) {

@@ -25,13 +25,17 @@ are supplied at runtime and are not part of the image.
 - Git
 - Docker Desktop or a compatible Docker Engine, already running
 - All three Cynapsa identities must belong to the same mesh
-- A fresh enrollment token for every new local installation
-- A Gemini API key for the maps and orchestrator containers
+- An active enrollment grant with capacity for each new local installation
+- A LiteLLM gateway API key for the maps and orchestrator containers
 - A Google Maps API key with Places API access for the maps container
 
-Enrollment tokens are one-time credentials. After successful enrollment, each
-identity uses the encrypted profile in its Docker volume and no longer needs the
-token.
+Enrollment grants are reusable by default, but may have a mesh scope, expiry,
+revocation, or installation limit. After successful enrollment, each identity
+uses the encrypted installation profile in its Docker volume and no longer
+needs the original token. Mesh removal revokes installations in that mesh,
+not enrollment grants. After rejoining, the old profile cannot authenticate;
+use `./run.sh --force-enroll` with a still-valid token to create a new
+installation in the same state volume. Go Core handles profile replacement.
 
 Do not configure an entity's own agent ID. Enrollment resolves that identity
 and Go Core stores it in the profile. `DEMO_ORCHESTRATOR_AGENT_ID` and
@@ -51,10 +55,11 @@ ID and the orchestrator's bare agent ID with the client enrollment token.
 Use separate local Cynapsa installations. Do not start a local server with the
 same installation profile while a deployed Cloud Run worker is active. Both
 demo worker pools are currently disabled, but do not reuse their saved Cloud
-Run profiles or previously consumed enrollment tokens for local installs.
+Run profiles for local installs. Reuse an active grant only when its scope and
+installation limit permit another installation.
 
 For isolated local testing, create or select server identities in one mesh and
-generate fresh enrollment tokens. Start maps first. Copy its printed bare agent
+provide valid enrollment grants. Start maps first. Copy its printed bare agent
 ID into the orchestrator's `DEMO_MAPS_AGENT_ID`. Start the orchestrator and copy
 its printed bare agent ID into the client's `DEMO_ORCHESTRATOR_AGENT_ID`.
 
@@ -72,11 +77,14 @@ Set these values in `maps/.env`:
 ```dotenv
 CYNAPSA_TOKEN=replace-with-maps-enrollment-token
 DEMO_MESH_ID=replace-with-mesh-id
-GEMINI_API_KEY=replace-with-gemini-api-key
+# LITELLM_API_KEY=replace-with-gateway-api-key
 GOOGLE_MAPS_API_KEY=replace-with-google-maps-api-key
 ```
 
-`DEMO_GEMINI_MODEL` is an optional override. Start the agent:
+Put the gateway key in `maps/.private/litellm_api_key` (mode `0600`), or
+uncomment `LITELLM_API_KEY` in `.env`. `LITELLM_BASE_URL` and `LITELLM_MODEL`
+are optional overrides; defaults are `https://litellm.eladrave.com` and
+`gpt-5.6-terra-high`. Start the agent:
 
 ```sh
 ./run.sh
@@ -108,10 +116,12 @@ Set these values in `orchestrator/.env`:
 CYNAPSA_TOKEN=replace-with-orchestrator-enrollment-token
 DEMO_MESH_ID=replace-with-mesh-id
 DEMO_MAPS_AGENT_ID=agent-id@connect.cynapsa.com
-GEMINI_API_KEY=replace-with-gemini-api-key
+# LITELLM_API_KEY=replace-with-gateway-api-key
 ```
 
-`DEMO_GEMINI_MODEL` is an optional override. Start the agent:
+Put the gateway key in `orchestrator/.private/litellm_api_key` (mode `0600`),
+or uncomment `LITELLM_API_KEY` in `.env`. The same optional gateway overrides
+apply here. Start the agent:
 
 ```sh
 ./run.sh
@@ -124,7 +134,7 @@ demo-orchestrator ready as <agent-id>@connect.cynapsa.com
 ```
 
 After the first successful enrollment, remove `CYNAPSA_TOKEN` from `.env`. Keep
-`GEMINI_API_KEY` available for every run.
+the gateway key available for every run.
 
 Default state volume: `cynapsa-demo-orchestrator-state`.
 
@@ -177,6 +187,18 @@ Force a rebuild from the SDK and Go Core bundled in the entity directory:
 ./run.sh --build
 ```
 
+After an identity has been removed from its mesh and re-added, place its
+still-valid enrollment token in that directory's `.env` and run
+`./run.sh --force-enroll`. The entrypoint invokes the bundled
+`cynapsa run --force-enroll` with the token from a private file and a no-op
+target. After that CLI session closes, it starts the native agent from the
+new saved profile in the same Docker volume; it does not switch volumes. Stop
+the old container first. If a grant expired or was revoked independently,
+obtain a new grant.
+The bundled SDK includes force-enroll and native remote-error handling.
+After changing bundled SDK/Core source, use `./run.sh --build` and restart
+any running container; an existing container keeps its original image.
+
 ## Test another enrollment token
 
 A saved profile takes precedence over a new token. To test another identity or
@@ -209,7 +231,7 @@ docker volume rm cynapsa-demo-client-state
 ```
 
 Do this only when the installation should be discarded. A subsequent run needs
-a fresh enrollment token.
+an active enrollment grant with capacity for a new installation.
 
 ## Expected failure signals
 

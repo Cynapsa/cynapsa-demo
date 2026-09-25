@@ -39,9 +39,12 @@ and performs no independent retry.
 
 Inbound deduplication uses authenticated mesh, authenticated sender, and
 message ID. Integrity, identity, server-authorized peer state,
-application-path policy, expiry, and capacity checks fail closed before SDK
-publication. No complete mesh-member snapshot is downloaded. Unknown inbound
-exact senders require an authenticated server handshake before lane admission.
+application-path policy, expiry, and capacity checks run before SDK
+publication. The application policy allows all peers and paths by default;
+an explicit `policy.set` replaces it. Server-side mesh authorization remains
+mandatory regardless of local policy. No complete mesh-member snapshot is
+downloaded. Unknown inbound exact senders require an authenticated server
+handshake before lane admission.
 
 Each active peer has bounded Core-owned work state under a shared count and
 byte budget. A logical revoke closes every installation of that agent; an

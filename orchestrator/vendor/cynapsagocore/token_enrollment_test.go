@@ -3,14 +3,22 @@ package cynapsagocore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	v1 "github.com/Cynapsa/cynapsagocore/api/v1"
+	"github.com/Cynapsa/cynapsagocore/internal/diagnostics"
 	"github.com/Cynapsa/cynapsagocore/internal/enrollment"
+	"github.com/Cynapsa/cynapsagocore/internal/model"
+	coreruntime "github.com/Cynapsa/cynapsagocore/internal/runtime"
 	"github.com/Cynapsa/cynapsagocore/internal/sdkboundary"
 	"github.com/Cynapsa/cynapsagocore/internal/sessionkernel"
 	"github.com/Cynapsa/cynapsagocore/internal/transport/rank2xmpp"
@@ -120,6 +128,156 @@ type v2EnrollmentProvider struct {
 	enrollCalls int
 	renewCalls  int
 	unavailable bool
+}
+
+type installationJWTProvider struct{}
+
+type blockedOldRenewProvider struct {
+	installationJWTProvider
+	oldInstallationID string
+	entered           chan struct{}
+	release           chan struct{}
+	enteredOnce       sync.Once
+	releaseOnce       sync.Once
+}
+
+func (provider *blockedOldRenewProvider) RenewV2(ctx context.Context, request enrollment.RenewRequest) (enrollment.Bundle, *enrollment.Failure) {
+	if request.InstallationID == provider.oldInstallationID {
+		provider.enteredOnce.Do(func() { close(provider.entered) })
+		select {
+		case <-provider.release:
+		case <-ctx.Done():
+			return enrollment.Bundle{}, &enrollment.Failure{Code: enrollment.FailureCancelled}
+		}
+	}
+	return provider.installationJWTProvider.RenewV2(ctx, request)
+}
+
+func (provider *blockedOldRenewProvider) unblock() {
+	provider.releaseOnce.Do(func() { close(provider.release) })
+}
+
+type observedOldRenewStore struct {
+	enrollment.StateStore
+	enrollment.ProfileStore
+	profileID         string
+	oldInstallationID string
+	attempted         chan oldRenewWriteResult
+}
+
+type oldRenewWriteResult struct {
+	swapped bool
+	err     error
+}
+
+func (store *observedOldRenewStore) CompareAndSwapProfile(ctx context.Context, profileID, expectedInstallationID string, replacement enrollment.Profile) (bool, error) {
+	swapped, err := store.ProfileStore.CompareAndSwapProfile(ctx, profileID, expectedInstallationID, replacement)
+	if profileID == store.profileID && expectedInstallationID == store.oldInstallationID {
+		store.attempted <- oldRenewWriteResult{swapped: swapped, err: err}
+	}
+	return swapped, err
+}
+
+func (installationJWTProvider) Enroll(context.Context, enrollment.Request) (enrollment.Bundle, *enrollment.Failure) {
+	return enrollment.Bundle{}, &enrollment.Failure{Code: enrollment.FailureRejected}
+}
+
+func (installationJWTProvider) EnrollV2(_ context.Context, request enrollment.Request) (enrollment.Bundle, *enrollment.Failure) {
+	bundle := successfulV2EnrollmentBundle(request)
+	bundle.AccessToken = installationJWT(bundle.InstallationID, bundle.SessionResource)
+	return bundle, nil
+}
+
+func (installationJWTProvider) RenewV2(_ context.Context, request enrollment.RenewRequest) (enrollment.Bundle, *enrollment.Failure) {
+	bundle := successfulV2EnrollmentBundle(enrollment.Request{
+		MeshID: request.MeshID, InstallationID: request.InstallationID, InstallationSecret: request.InstallationSecret,
+	})
+	bundle.AccessToken = installationJWT(bundle.InstallationID, bundle.SessionResource)
+	return bundle, nil
+}
+
+func installationJWT(installationID, resource string) []byte {
+	claims := `{"exp":4102444800,"installation_id":"` + installationID + `","session_resource":"` + resource + `"}`
+	return []byte("e30." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".sig")
+}
+
+type installationJWTSession struct {
+	*enrollmentTokenSession
+	credential []byte
+}
+
+func (session *installationJWTSession) Authenticate(ctx context.Context, username string, credential []byte) (string, []byte, error) {
+	session.mu.Lock()
+	session.credential = append([]byte(nil), credential...)
+	session.mu.Unlock()
+	return session.builtInTestSession.Authenticate(ctx, username, []byte("secret"))
+}
+
+func (session *installationJWTSession) authSnapshot() ([]byte, string) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return append([]byte(nil), session.credential...), session.resource
+}
+
+type forcePublishFailureServices struct {
+	store             enrollment.ProfileStore
+	profileID         string
+	oldInstallationID string
+	newInstallationID string
+	readyCalled       bool
+	sawNewProfile     bool
+}
+
+func (*forcePublishFailureServices) Transition(model.LifecycleState) error { return nil }
+func (services *forcePublishFailureServices) CommitAuthenticated(ctx context.Context, publisher coreruntime.AuthenticatedPublisher) error {
+	return publisher(func() error {
+		services.readyCalled = true
+		profile, found, err := services.store.LoadProfile(ctx, services.profileID)
+		services.sawNewProfile = err == nil && found && profile.InstallationID != services.oldInstallationID
+		if services.sawNewProfile {
+			services.newInstallationID = profile.InstallationID
+		}
+		profile.Clear()
+		return errors.New("injected lifecycle publish failure")
+	})
+}
+func (*forcePublishFailureServices) PublishEvent(context.Context, model.Event) error { return nil }
+func (*forcePublishFailureServices) Status() model.Status                            { return model.Status{} }
+func (*forcePublishFailureServices) Diagnostics() diagnostics.Snapshot               { return diagnostics.Snapshot{} }
+
+type renewBeforePublishServices struct {
+	forcePublishFailureServices
+	latestJWT []byte
+	updated   bool
+}
+
+func (services *renewBeforePublishServices) CommitAuthenticated(ctx context.Context, publisher coreruntime.AuthenticatedPublisher) error {
+	profile, found, err := services.store.LoadProfile(ctx, services.profileID)
+	if err != nil || !found || profile.InstallationID != services.oldInstallationID {
+		profile.Clear()
+		return errors.New("old active profile unavailable before publication")
+	}
+	credential, hasCredential := profile.Credentials["mesh-one"]
+	if !hasCredential {
+		profile.Clear()
+		return errors.New("old mesh credential unavailable before publication")
+	}
+	clear(credential.Bundle.AccessToken)
+	credential.Bundle.AccessToken = append([]byte(nil), services.latestJWT...)
+	credential.ReceivedAt = time.Now().UTC()
+	credential.UsableUntil, err = enrollment.UsableUntil(credential.Bundle.AccessToken, credential.ReceivedAt, credential.Bundle.ExpiresIn)
+	if err != nil {
+		profile.Clear()
+		return err
+	}
+	profile.Credentials["mesh-one"] = credential
+	swapped, err := services.store.CompareAndSwapProfile(ctx, services.profileID, services.oldInstallationID, profile)
+	profile.Clear()
+	if err != nil || !swapped {
+		return errors.New("old mesh credential update failed before publication")
+	}
+	services.updated = true
+	return services.forcePublishFailureServices.CommitAuthenticated(ctx, publisher)
 }
 
 func (provider *v2EnrollmentProvider) Enroll(context.Context, enrollment.Request) (enrollment.Bundle, *enrollment.Failure) {
@@ -285,6 +443,447 @@ func TestV2ProfilesSupportSameTokenAcrossMeshesReplicasAndTokenFreeRestart(t *te
 	}
 	shutdownAndDrain(t, restart)
 	_ = restart.Destroy()
+}
+
+func TestForceEnrollReplacesActiveInstallationOnlyAfterAuthentication(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	provider := &retryingEnrollment{}
+	defer provider.clear()
+	good := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		return builtInTestDialer{session: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}, nil
+	})}
+	first := submitProfileTokenLogin(t, newEnrollmentStateTestCore(t, good, provider, enrollment.NewProductionStateStore()), "force-demo", "mesh-one", "force-initial")
+	bad := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		return builtInTestDialer{session: newBuiltInTestSession()}, nil
+	})}
+	failedCore := newEnrollmentStateTestCore(t, bad, provider, enrollment.NewProductionStateStore())
+	failedAdmission, err := failedCore.Submit(t.Context(), v1.AuthTokenLoginCommand{
+		CommandBase: v1.CommandBase{CommandID: "force-failed", SDKSessionID: "force-session"},
+		Auth:        v1.AuthTokenInput{Token: enrollmentPublicToken, MeshID: "mesh-one", ProfileID: "force-demo", ForceEnroll: true},
+	})
+	if err != nil || !failedAdmission.Accepted {
+		t.Fatalf("force failure admission=%#v err=%v", failedAdmission, err)
+	}
+	failed, err := failedCore.NextCompletion(t.Context())
+	if err != nil || failed.OK {
+		t.Fatalf("forced login unexpectedly succeeded: %#v err=%v", failed, err)
+	}
+	shutdownAndDrain(t, failedCore)
+	_ = failedCore.Destroy()
+	store := enrollment.NewProductionStateStore().(enrollment.ProfileStore)
+	active, found, err := store.LoadProfile(t.Context(), "force-demo")
+	if err != nil || !found || active.InstallationID != first.AgentInstanceID {
+		t.Fatalf("failed force changed active installation: found=%v err=%v", found, err)
+	}
+	active.Clear()
+	provider.mu.Lock()
+	failedInstallation := provider.requests[len(provider.requests)-1].InstallationID
+	provider.mu.Unlock()
+	if failedInstallation == first.AgentInstanceID {
+		t.Fatal("force reused the cached installation")
+	}
+	success := submitForceTokenLogin(t, newEnrollmentStateTestCore(t, good, provider, enrollment.NewProductionStateStore()), "force-demo", "mesh-one", "force-success")
+	if success.AgentInstanceID != failedInstallation {
+		t.Fatal("retry consumed another installation rather than resuming pending enrollment")
+	}
+	if success.AgentInstanceID == first.AgentInstanceID {
+		t.Fatal("force did not replace the old installation")
+	}
+	restart := newEnrollmentStateTestCore(t, good, provider, enrollment.NewProductionStateStore())
+	resumed := submitInstallationLogin(t, restart, "force-demo", "mesh-one", "force-restart")
+	if resumed.AgentInstanceID != success.AgentInstanceID {
+		t.Fatal("token-free restart did not select the new installation")
+	}
+	shutdownAndDrain(t, restart)
+	_ = restart.Destroy()
+}
+
+func TestForceEnrollFirstTransportConnectionUsesNewInstallationJWT(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	sessions := make(chan *installationJWTSession, 2)
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		session := &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}
+		sessions <- session
+		return builtInTestDialer{session: session}, nil
+	})}
+	provider := installationJWTProvider{}
+	first := submitProfileTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, enrollment.NewProductionStateStore()), "force-jwt", "mesh-one", "jwt-initial")
+	initialSession := <-sessions
+	initialJWT, initialResource := initialSession.authSnapshot()
+	wantInitialResource := "r2." + first.AgentInstanceID + ".session"
+	if initialResource != wantInitialResource || !bytes.Equal(initialJWT, installationJWT(first.AgentInstanceID, wantInitialResource)) {
+		t.Fatal("initial transport did not use its installation JWT and session resource")
+	}
+
+	forced := submitForceTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, enrollment.NewProductionStateStore()), "force-jwt", "mesh-one", "jwt-forced")
+	forcedSession := <-sessions
+	forcedJWT, forcedResource := forcedSession.authSnapshot()
+	wantForcedResource := "r2." + forced.AgentInstanceID + ".session"
+	if forced.AgentInstanceID == first.AgentInstanceID || bytes.Equal(forcedJWT, initialJWT) {
+		t.Fatal("force enrollment reused the previous installation or its JWT")
+	}
+	if forcedResource != wantForcedResource || !bytes.Equal(forcedJWT, installationJWT(forced.AgentInstanceID, wantForcedResource)) {
+		t.Fatal("first forced transport connection did not receive the new installation JWT and session resource")
+	}
+}
+
+func TestForceEnrollEmptyProfileUsesNewInstallationJWT(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	state := enrollment.NewProductionStateStore()
+	store := state.(enrollment.ProfileStore)
+	profile, found, err := store.LoadProfile(t.Context(), "force-empty")
+	profile.Clear()
+	if err != nil || found {
+		t.Fatalf("expected an empty profile: found=%v err=%v", found, err)
+	}
+	sessions := make(chan *installationJWTSession, 1)
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		session := &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}
+		sessions <- session
+		return builtInTestDialer{session: session}, nil
+	})}
+	result := submitForceTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, installationJWTProvider{}, state), "force-empty", "mesh-one", "jwt-first-force")
+	credential, resource := (<-sessions).authSnapshot()
+	wantResource := "r2." + result.AgentInstanceID + ".session"
+	if resource != wantResource || !bytes.Equal(credential, installationJWT(result.AgentInstanceID, wantResource)) {
+		t.Fatal("first enrollment with force did not authenticate using its installation JWT and session resource")
+	}
+	profile, found, err = store.LoadProfile(t.Context(), "force-empty")
+	installationID := profile.InstallationID
+	profile.Clear()
+	if err != nil || !found || installationID != result.AgentInstanceID {
+		t.Fatalf("first force enrollment did not promote its installation: found=%v err=%v", found, err)
+	}
+}
+
+func TestForceEnrollPendingNamespaceCannotCollideWithPublicProfile(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	const targetProfileID = "force-collision-target"
+	oldDigest := sha256.Sum256([]byte("cynapsa-core/force-enroll/v1\x00pending\x00" + targetProfileID + "\x00"))
+	collisionProfileID := "force-pending-" + hex.EncodeToString(oldDigest[:16])
+	if !enrollment.ValidProfileID(collisionProfileID) {
+		t.Fatal("former pending profile ID must be reachable as a public profile")
+	}
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		return builtInTestDialer{session: &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}}, nil
+	})}
+	provider := installationJWTProvider{}
+	store := enrollment.NewProductionStateStore().(enrollment.ProfileStore)
+	collision := submitProfileTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, enrollment.NewProductionStateStore()), collisionProfileID, "mesh-one", "collision-public")
+	before, found, err := store.LoadProfile(t.Context(), collisionProfileID)
+	if err != nil || !found || before.InstallationID != collision.AgentInstanceID {
+		before.Clear()
+		t.Fatalf("public collision profile unavailable: found=%v err=%v", found, err)
+	}
+	defer before.Clear()
+
+	forced := submitForceTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, enrollment.NewProductionStateStore()), targetProfileID, "mesh-one", "collision-forced")
+	if forced.AgentInstanceID == collision.AgentInstanceID {
+		t.Fatal("force enrollment reused the public profile at the former pending ID")
+	}
+	after, found, err := store.LoadProfile(t.Context(), collisionProfileID)
+	if err != nil || !found || !reflect.DeepEqual(before, after) {
+		after.Clear()
+		t.Fatalf("force enrollment changed public collision profile: found=%v err=%v", found, err)
+	}
+	after.Clear()
+}
+
+func TestForceEnrollPublishFailureRestoresOldActiveProfile(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	state := enrollment.NewProductionStateStore()
+	store := state.(enrollment.ProfileStore)
+	sessions := make(chan *installationJWTSession, 2)
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		session := &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}
+		sessions <- session
+		return builtInTestDialer{session: session}, nil
+	})}
+	provider := installationJWTProvider{}
+	first := submitProfileTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, state), "force-rollback", "mesh-one", "rollback-initial")
+	<-sessions
+
+	factory, err := sessionkernel.NewFactory(sessionkernel.DeploymentConfig{QueueLimit: 4}, sessionkernel.Dependencies{
+		Connectivity: connectivity, Enrollment: provider, EnrollmentState: state,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, dependencies, err := factory.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Shutdown(context.Background()); err != nil {
+			t.Errorf("controller shutdown: %v", err)
+		}
+	})
+	services := &forcePublishFailureServices{store: store, profileID: "force-rollback", oldInstallationID: first.AgentInstanceID}
+	command := model.Command{ID: "rollback-forced", Name: "auth.token_login", SessionID: "rollback-session", Args: model.TokenAuthArgs{
+		Token: []byte(enrollmentPublicToken[len("cpsa_"):]), MeshID: "mesh-one", ProfileID: "force-rollback", ForceEnroll: true,
+	}}
+	result, err := dependencies.Handlers[command.Name](t.Context(), services, command)
+	if err != nil || result.Err == nil || result.Value != nil || !services.readyCalled || !services.sawNewProfile {
+		t.Fatalf("failed publish did not follow network auth and profile promotion: result=%+v err=%v ready=%v promoted=%v", result, err, services.readyCalled, services.sawNewProfile)
+	}
+	forcedJWT, forcedResource := (<-sessions).authSnapshot()
+	wantForcedResource := "r2." + services.newInstallationID + ".session"
+	if forcedResource != wantForcedResource || !bytes.Equal(forcedJWT, installationJWT(services.newInstallationID, wantForcedResource)) {
+		t.Fatal("forced transport did not authenticate with the new installation credential")
+	}
+	profile, found, err := store.LoadProfile(t.Context(), "force-rollback")
+	installationID := profile.InstallationID
+	credential, hasCredential := profile.Credentials["mesh-one"]
+	oldJWT := bytes.Equal(credential.Bundle.AccessToken, installationJWT(first.AgentInstanceID, "r2."+first.AgentInstanceID+".session"))
+	profile.Clear()
+	if err != nil || !found || installationID != first.AgentInstanceID || !hasCredential || !oldJWT || controller.Snapshot().Authenticated {
+		t.Fatalf("failed publish did not restore old active profile: found=%v installation=%q old_credential=%v authenticated=%v err=%v", found, installationID, oldJWT, controller.Snapshot().Authenticated, err)
+	}
+}
+
+func TestForceEnrollFirstPublishFailureLeavesActiveAbsentAndReusesPending(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	const profileID = "force-first-rollback"
+	state := enrollment.NewProductionStateStore()
+	store := state.(enrollment.ProfileStore)
+	profile, found, err := store.LoadProfile(t.Context(), profileID)
+	profile.Clear()
+	if err != nil || found {
+		t.Fatalf("expected no active profile before first enrollment: found=%v err=%v", found, err)
+	}
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		return builtInTestDialer{session: &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}}, nil
+	})}
+	provider := installationJWTProvider{}
+	factory, err := sessionkernel.NewFactory(sessionkernel.DeploymentConfig{QueueLimit: 4}, sessionkernel.Dependencies{
+		Connectivity: connectivity, Enrollment: provider, EnrollmentState: state,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, dependencies, err := factory.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Shutdown(context.Background()); err != nil {
+			t.Errorf("controller shutdown: %v", err)
+		}
+	})
+	services := &forcePublishFailureServices{store: store, profileID: profileID}
+	command := model.Command{ID: "first-rollback-forced", Name: "auth.token_login", SessionID: "first-rollback-session", Args: model.TokenAuthArgs{
+		Token: []byte(enrollmentPublicToken[len("cpsa_"):]), MeshID: "mesh-one", ProfileID: profileID, ForceEnroll: true,
+	}}
+	result, err := dependencies.Handlers[command.Name](t.Context(), services, command)
+	if err != nil || result.Err == nil || result.Value != nil || !services.readyCalled || !services.sawNewProfile || services.newInstallationID == "" {
+		t.Fatalf("first forced enrollment did not fail after promotion: result=%+v err=%v ready=%v promoted=%v", result, err, services.readyCalled, services.sawNewProfile)
+	}
+	profile, found, err = store.LoadProfile(t.Context(), profileID)
+	profile.Clear()
+	if err != nil || found || controller.Snapshot().Authenticated {
+		t.Fatalf("failed first force left an active profile: found=%v authenticated=%v err=%v", found, controller.Snapshot().Authenticated, err)
+	}
+	retry := submitForceTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, enrollment.NewProductionStateStore()), profileID, "mesh-one", "first-rollback-retry")
+	if retry.AgentInstanceID != services.newInstallationID {
+		t.Fatalf("retry generated a new pending installation: got=%q want=%q", retry.AgentInstanceID, services.newInstallationID)
+	}
+}
+
+func TestForceEnrollPublishFailureRestoresLatestOldProfileRenewal(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	const profileID = "force-renew-rollback"
+	state := enrollment.NewProductionStateStore()
+	store := state.(enrollment.ProfileStore)
+	sessions := make(chan *installationJWTSession, 2)
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		session := &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}
+		sessions <- session
+		return builtInTestDialer{session: session}, nil
+	})}
+	provider := installationJWTProvider{}
+	first := submitProfileTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, provider, state), profileID, "mesh-one", "renew-rollback-initial")
+	<-sessions
+	oldJWT := installationJWT(first.AgentInstanceID, "r2."+first.AgentInstanceID+".session")
+	claims := `{"exp":4102444800,"installation_id":"` + first.AgentInstanceID + `","session_resource":"r2.` + first.AgentInstanceID + `.session","renewal":"latest"}`
+	latestJWT := []byte("e30." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".sig")
+	if bytes.Equal(latestJWT, oldJWT) {
+		t.Fatal("renewal fixture did not distinguish the new old-profile credential")
+	}
+	factory, err := sessionkernel.NewFactory(sessionkernel.DeploymentConfig{QueueLimit: 4}, sessionkernel.Dependencies{
+		Connectivity: connectivity, Enrollment: provider, EnrollmentState: state,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, dependencies, err := factory.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Shutdown(context.Background()); err != nil {
+			t.Errorf("controller shutdown: %v", err)
+		}
+	})
+	services := &renewBeforePublishServices{
+		forcePublishFailureServices: forcePublishFailureServices{store: store, profileID: profileID, oldInstallationID: first.AgentInstanceID},
+		latestJWT:                   latestJWT,
+	}
+	command := model.Command{ID: "renew-rollback-forced", Name: "auth.token_login", SessionID: "renew-rollback-session", Args: model.TokenAuthArgs{
+		Token: []byte(enrollmentPublicToken[len("cpsa_"):]), MeshID: "mesh-one", ProfileID: profileID, ForceEnroll: true,
+	}}
+	result, err := dependencies.Handlers[command.Name](t.Context(), services, command)
+	if err != nil || result.Err == nil || result.Value != nil || !services.updated || !services.readyCalled || !services.sawNewProfile {
+		t.Fatalf("force did not fail after renewed old profile was displaced: result=%+v err=%v updated=%v ready=%v promoted=%v", result, err, services.updated, services.readyCalled, services.sawNewProfile)
+	}
+	forcedJWT, forcedResource := (<-sessions).authSnapshot()
+	wantForcedResource := "r2." + services.newInstallationID + ".session"
+	if forcedResource != wantForcedResource || !bytes.Equal(forcedJWT, installationJWT(services.newInstallationID, wantForcedResource)) {
+		t.Fatal("force did not authenticate over the network with the pending installation")
+	}
+	active, found, err := store.LoadProfile(t.Context(), profileID)
+	activeID := active.InstallationID
+	credential, hasCredential := active.Credentials["mesh-one"]
+	restoredLatest := bytes.Equal(credential.Bundle.AccessToken, latestJWT)
+	restoredOriginal := bytes.Equal(credential.Bundle.AccessToken, oldJWT)
+	active.Clear()
+	if err != nil || !found || activeID != first.AgentInstanceID || !hasCredential || !restoredLatest || restoredOriginal || controller.Snapshot().Authenticated {
+		t.Fatalf("rollback lost latest old-profile renewal: found=%v active=%q latest=%v original=%v authenticated=%v err=%v", found, activeID, restoredLatest, restoredOriginal, controller.Snapshot().Authenticated, err)
+	}
+}
+
+func TestForceEnrollRejectsStaleOldInstallationRenewal(t *testing.T) {
+	stateRoot := t.TempDir()
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CYNAPSA_STATE_DIRECTORY", stateRoot)
+	const profileID = "force-renew-race"
+	connectivity := enrollmentOnlyConnectivity{delegate: newBuiltInConnectivityFactory(func(string, sessionkernel.OperationalProfile) (rank2xmpp.Dialer, error) {
+		return builtInTestDialer{session: &installationJWTSession{enrollmentTokenSession: &enrollmentTokenSession{builtInTestSession: newBuiltInTestSession()}}}, nil
+	})}
+	first := submitProfileTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, installationJWTProvider{}, enrollment.NewProductionStateStore()), profileID, "mesh-one", "renew-race-initial")
+	state := enrollment.NewProductionStateStore()
+	store := state.(enrollment.ProfileStore)
+	profile, found, err := store.LoadProfile(t.Context(), profileID)
+	if err != nil || !found || profile.InstallationID != first.AgentInstanceID {
+		profile.Clear()
+		t.Fatalf("initial profile unavailable: found=%v err=%v", found, err)
+	}
+	credential := profile.Credentials["mesh-one"]
+	credential.ReceivedAt = time.Now().UTC().Add(-12 * time.Hour)
+	credential.UsableUntil, err = enrollment.UsableUntil(credential.Bundle.AccessToken, credential.ReceivedAt, credential.Bundle.ExpiresIn)
+	if err != nil {
+		profile.Clear()
+		t.Fatal(err)
+	}
+	profile.Credentials["mesh-one"] = credential
+	err = store.SaveProfile(t.Context(), profile)
+	profile.Clear()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := &blockedOldRenewProvider{oldInstallationID: first.AgentInstanceID, entered: make(chan struct{}), release: make(chan struct{})}
+	oldState := enrollment.NewProductionStateStore()
+	observed := &observedOldRenewStore{
+		StateStore: oldState, ProfileStore: oldState.(enrollment.ProfileStore),
+		profileID: profileID, oldInstallationID: first.AgentInstanceID, attempted: make(chan oldRenewWriteResult, 1),
+	}
+	oldCore := newEnrollmentStateTestCore(t, connectivity, blocked, observed)
+	t.Cleanup(func() {
+		blocked.unblock()
+		shutdownAndDrain(t, oldCore)
+		if err := oldCore.Destroy(); err != nil {
+			t.Errorf("old Core destroy: %v", err)
+		}
+	})
+	oldLogin := submitInstallationLogin(t, oldCore, profileID, "mesh-one", "renew-race-old-login")
+	if oldLogin.AgentInstanceID != first.AgentInstanceID {
+		t.Fatal("ordinary login did not select the old installation")
+	}
+	select {
+	case <-blocked.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old installation renewal did not reach RenewV2")
+	}
+
+	forced := submitForceTokenLogin(t, newEnrollmentStateTestCore(t, connectivity, installationJWTProvider{}, enrollment.NewProductionStateStore()), profileID, "mesh-one", "renew-race-forced")
+	if forced.AgentInstanceID == first.AgentInstanceID {
+		t.Fatal("force enrollment did not select a new installation")
+	}
+	blocked.unblock()
+	select {
+	case outcome := <-observed.attempted:
+		if outcome.err != nil || outcome.swapped {
+			t.Fatalf("stale renewal CAS was not cleanly rejected: swapped=%v err=%v", outcome.swapped, outcome.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old renewal did not attempt its credential write")
+	}
+	active, found, err := store.LoadProfile(t.Context(), profileID)
+	activeID := active.InstallationID
+	credential, hasCredential := active.Credentials["mesh-one"]
+	newJWT := bytes.Equal(credential.Bundle.AccessToken, installationJWT(forced.AgentInstanceID, "r2."+forced.AgentInstanceID+".session"))
+	oldJWT := bytes.Equal(credential.Bundle.AccessToken, installationJWT(first.AgentInstanceID, "r2."+first.AgentInstanceID+".session"))
+	active.Clear()
+	if err != nil || !found || activeID != forced.AgentInstanceID || !hasCredential || !newJWT || oldJWT {
+		t.Fatalf("stale renewal restored old active credential: found=%v active=%q new_jwt=%v old_jwt=%v err=%v", found, activeID, newJWT, oldJWT, err)
+	}
+}
+
+func submitForceTokenLogin(t *testing.T, core *Core, profileID, meshID, commandID string) v1.AuthResult {
+	t.Helper()
+	defer func() { shutdownAndDrain(t, core); _ = core.Destroy() }()
+	admission, err := core.Submit(t.Context(), v1.AuthTokenLoginCommand{
+		CommandBase: v1.CommandBase{CommandID: v1.CommandID(commandID), SDKSessionID: "force-session"},
+		Auth:        v1.AuthTokenInput{Token: enrollmentPublicToken, MeshID: v1.MeshID(meshID), ProfileID: profileID, ForceEnroll: true},
+	})
+	if err != nil || !admission.Accepted {
+		t.Fatalf("force admission=%#v err=%v", admission, err)
+	}
+	completion, err := core.NextCompletion(t.Context())
+	result, ok := completion.Result.(v1.AuthResult)
+	if err != nil || !completion.OK || !ok {
+		t.Fatalf("force completion=%#v err=%v", completion, err)
+	}
+	return result
 }
 
 func submitProfileTokenLogin(t *testing.T, core *Core, profileID, meshID, commandID string) v1.AuthResult {

@@ -39,9 +39,10 @@ type authArgsWire struct {
 }
 
 type tokenAuthArgsWire struct {
-	Token     clearableToken `json:"token"`
-	MeshID    string         `json:"mesh_id"`
-	ProfileID string         `json:"profile_id,omitempty"`
+	Token       clearableToken `json:"token"`
+	MeshID      string         `json:"mesh_id"`
+	ProfileID   string         `json:"profile_id,omitempty"`
+	ForceEnroll bool           `json:"force_enroll,omitempty"`
 }
 
 type installationAuthArgsWire struct {
@@ -390,7 +391,7 @@ func decodeABICommandArgs(name v1.CommandName, base v1.CommandBase, raw json.Raw
 		if err := strictDecode(raw, &args); err != nil {
 			return nil, err
 		}
-		auth := v1.AuthTokenInput{Token: string(args.Token), MeshID: v1.MeshID(args.MeshID), ProfileID: args.ProfileID}
+		auth := v1.AuthTokenInput{Token: string(args.Token), MeshID: v1.MeshID(args.MeshID), ProfileID: args.ProfileID, ForceEnroll: args.ForceEnroll}
 		if name == v1.CommandAuthTokenLogin {
 			return v1.AuthTokenLoginCommand{CommandBase: base, Auth: auth}, nil
 		}
@@ -1156,7 +1157,7 @@ func decodeABIInternalTokenAuth(name v1.CommandName, base v1.CommandBase, raw js
 		return model.Command{}, malformed("token")
 	}
 	defer clear(bare)
-	rawCommand := model.Command{ID: string(base.CommandID), Name: string(name), SessionID: string(base.SDKSessionID), Args: model.TokenAuthArgs{Token: bare, MeshID: args.MeshID, ProfileID: profileID}}
+	rawCommand := model.Command{ID: string(base.CommandID), Name: string(name), SessionID: string(base.SDKSessionID), Args: model.TokenAuthArgs{Token: bare, MeshID: args.MeshID, ProfileID: profileID, ForceEnroll: args.ForceEnroll}}
 	frozen, _, err := model.FreezeCommand(rawCommand)
 	return frozen, err
 }

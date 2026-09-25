@@ -289,6 +289,7 @@ class _AuthenticationConfig:
     username: str
     profile_id: str | None
     agent_instance_id: str
+    force_enroll: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +320,10 @@ class _ConnectConfig:
     @property
     def auth_mode(self) -> str:
         return self.authentication.mode
+
+    @property
+    def force_enroll(self) -> bool:
+        return self.authentication.force_enroll
 
     @property
     def command_timeout_ms(self) -> int:
@@ -356,6 +361,7 @@ def _validate_config(
     username: object = None,
     password: object = None,
     enrollment_token: object = None,
+    force_enroll: object = False,
     profile_id: object = "default",
     command_timeout_ms: object,
     rpc_timeout_ms: object,
@@ -366,6 +372,10 @@ def _validate_config(
     # text identifies fields but never includes caller-provided values.
     try:
         mesh = _public_string(mesh_id, "mesh_id", maximum=MAX_MESH_ID_BYTES)
+        if type(force_enroll) is not bool:
+            raise ValueError("force_enroll must be a boolean")
+        if force_enroll and enrollment_token is None:
+            raise ValueError("force_enroll requires enrollment_token")
         legacy_fields = (mesh_endpoint, username, password)
         legacy_selected = any(value is not None for value in legacy_fields)
         if legacy_selected:
@@ -393,7 +403,7 @@ def _validate_config(
             _validate_enrollment_token(enrollment_token)
             selected_profile = _validate_profile_id(profile_id)
             auth = _AuthenticationConfig(
-                "token", mesh, "", "", selected_profile, ""
+                "token", mesh, "", "", selected_profile, "", force_enroll
             )
         else:
             selected_profile = _validate_profile_id(profile_id)
@@ -1609,6 +1619,8 @@ def _authenticate_sync(
                 "mesh_id": config.mesh_id,
                 "profile_id": config.profile_id,
             }
+            if config.force_enroll:
+                auth_args["force_enroll"] = True
         else:
             auth_name = f"auth.installation_{auth_suffix}"
             auth_args = {
@@ -1661,6 +1673,7 @@ def connect(
     *,
     mesh_id: str,
     enrollment_token: str | None = None,
+    force_enroll: bool = False,
     profile_id: str = "default",
     mesh_endpoint: str | None = None,
     username: str | None = None,
@@ -1682,6 +1695,7 @@ def connect(
             username=username,
             password=password,
             enrollment_token=enrollment_token,
+            force_enroll=force_enroll,
             profile_id=profile_id,
             command_timeout_ms=command_timeout_ms,
             rpc_timeout_ms=rpc_timeout_ms,
@@ -1716,6 +1730,7 @@ async def connect_async(
     *,
     mesh_id: str,
     enrollment_token: str | None = None,
+    force_enroll: bool = False,
     profile_id: str = "default",
     mesh_endpoint: str | None = None,
     username: str | None = None,
@@ -1737,6 +1752,7 @@ async def connect_async(
             username=username,
             password=password,
             enrollment_token=enrollment_token,
+            force_enroll=force_enroll,
             profile_id=profile_id,
             command_timeout_ms=command_timeout_ms,
             rpc_timeout_ms=rpc_timeout_ms,

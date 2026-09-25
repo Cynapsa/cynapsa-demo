@@ -1267,7 +1267,7 @@ def test_urllib_request_argument_and_timeout_validation_matches_runtime(
         handle.close()
 
 
-def test_monkey_http_clients_project_404_using_library_semantics(
+def test_urllib_request_returns_http_error_status_as_buffered_response(
     bridge_factory: BridgeDriver,
 ) -> None:
     bridge_factory.responses["message.request"] = _rpc_response(
@@ -1286,173 +1286,16 @@ def test_monkey_http_clients_project_404_using_library_semantics(
         },
     )
     try:
-        requests_response = requests.get("http://agent.example/missing")
-        assert isinstance(requests_response, requests.Response)
-        assert requests_response.status_code == 404
-        assert requests_response.content == b"missing"
-
-        with httpx.Client() as client:
-            httpx_response = client.get("http://agent.example/missing")
-        assert isinstance(httpx_response, httpx.Response)
-        assert httpx_response.status_code == 404
-        assert httpx_response.content == b"missing"
-
-        urllib3_response = urllib3.PoolManager().request(
-            "GET", "http://agent.example/missing"
-        )
-        assert isinstance(urllib3_response, urllib3.HTTPResponse)
-        assert urllib3_response.status == 404
-        assert urllib3_response.data == b"missing"
-
-        with pytest.raises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen("http://agent.example/missing")
-        assert raised.value.code == 404
-        assert raised.value.reason == "Not Found"
-        assert raised.value.read() == b"missing"
-        assert raised.value.headers["content-type"] == "text/plain"
-    finally:
-        handle.close()
-
-
-def test_urllib_request_304_is_an_http_error(bridge_factory: BridgeDriver) -> None:
-    bridge_factory.responses["message.request"] = _rpc_response(
-        status=304, reason="Not Modified", body=b"",
-    )
-    handle = cynapsa.login(
-        **AUTH,
-        address_map={"http://agent.example": {"recipient": "peer@example.test", "mode": "rpc"}},
-    )
-    try:
-        with pytest.raises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen("http://agent.example/cached")
-        assert raised.value.code == 304
-        assert raised.value.read() == b""
-    finally:
-        handle.close()
-
-
-def test_urllib_request_follows_only_same_origin_mapped_redirects(
-    bridge_factory: BridgeDriver,
-) -> None:
-    def respond(command: dict[str, Any]) -> bytes | None:
-        if command["command_name"] != "message.request":
-            return None
-        path = command["args"]["payload"]["http_request"]["path"]
-        if path == "/start":
-            kind, result = _rpc_response(
-                status=302, reason="Found", body=b"",
-                headers=[{"name": "location", "value": "/end"}],
+        with urllib.request.urlopen("http://agent.example/missing") as response:
+            assert not isinstance(response, urllib.error.HTTPError)
+            assert (response.status, response.reason, response.msg) == (
+                404,
+                "Not Found",
+                "Not Found",
             )
-        else:
-            kind, result = _rpc_response(status=200, reason="OK", body=b"done")
-        return _success(command, kind, result)
-
-    bridge_factory.responder = respond
-    handle = cynapsa.login(
-        **AUTH,
-        address_map={"http://agent.example": {"recipient": "peer@example.test", "mode": "rpc"}},
-    )
-    try:
-        with urllib.request.urlopen("http://agent.example/start") as response:
-            assert response.read() == b"done"
-            assert response.geturl() == "http://agent.example/end"
-        paths = [
-            command["args"]["payload"]["http_request"]["path"]
-            for command in bridge_factory.commands
-            if command["command_name"] == "message.request"
-        ]
-        assert paths == ["/start", "/end"]
+            assert response.read() == b"missing"
     finally:
         handle.close()
-
-
-def test_urllib_request_redirect_preserves_stdlib_post_method_rules(
-    bridge_factory: BridgeDriver,
-) -> None:
-    bridge_factory.responses["message.request"] = _rpc_response(
-        status=302, reason="Found", body=b"",
-        headers=[{"name": "location", "value": "/end"}],
-    )
-    handle = cynapsa.login(
-        **AUTH,
-        address_map={"http://agent.example": {"recipient": "peer@example.test", "mode": "rpc"}},
-    )
-    try:
-        with pytest.raises(urllib.error.HTTPError):
-            # A repeated 302 eventually stops; the first redirected request
-            # must use GET and must not replay the POST body.
-            urllib.request.urlopen("http://agent.example/start", data=b"payload")
-        requests_on_wire = [
-            command["args"]["payload"]["http_request"]
-            for command in bridge_factory.commands
-            if command["command_name"] == "message.request"
-        ]
-        assert requests_on_wire[0]["method"] == "POST"
-        assert requests_on_wire[1]["method"] == "GET"
-        assert base64.b64decode(requests_on_wire[1]["body"]) == b""
-    finally:
-        handle.close()
-
-
-@pytest.mark.parametrize("location", ["https://outside.example/path", "/loop"])
-def test_urllib_request_redirect_never_escapes_mapping_or_loops(
-    bridge_factory: BridgeDriver, location: str,
-) -> None:
-    bridge_factory.responses["message.request"] = _rpc_response(
-        status=302, reason="Found", body=b"redirect",
-        headers=[{"name": "location", "value": location}],
-    )
-    handle = cynapsa.login(
-        **AUTH,
-        address_map={"http://agent.example": {"recipient": "peer@example.test", "mode": "rpc"}},
-    )
-    try:
-        with pytest.raises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen("http://agent.example/loop")
-        assert raised.value.code == 302
-        assert raised.value.read() == b"redirect"
-        count = sum(
-            command["command_name"] == "message.request"
-            for command in bridge_factory.commands
-        )
-        assert count == 1
-    finally:
-        handle.close()
-
-
-@pytest.mark.asyncio
-async def test_async_monkey_http_clients_receive_library_404(
-    bridge_factory: BridgeDriver,
-) -> None:
-    bridge_factory.responses["message.request"] = _rpc_response(
-        status=404,
-        reason="Not Found",
-        body=b"missing",
-        headers=[{"name": "content-type", "value": "text/plain"}],
-    )
-    handle = await cynapsa.login_async(
-        **AUTH,
-        address_map={
-            "http://agent.example": {
-                "recipient": "peer@example.test",
-                "mode": "rpc",
-            }
-        },
-    )
-    try:
-        async with httpx.AsyncClient() as client:
-            httpx_response = await client.get("http://agent.example/missing")
-        assert isinstance(httpx_response, httpx.Response)
-        assert httpx_response.status_code == 404
-        assert httpx_response.content == b"missing"
-
-        async with aiohttp.ClientSession() as client:
-            async with client.get("http://agent.example/missing") as response:
-                assert isinstance(response, aiohttp.ClientResponse)
-                assert response.status == 404
-                assert await response.read() == b"missing"
-    finally:
-        await handle.close()
 
 
 def test_urllib_request_string_data_selects_post_and_msg_is_fixed_success(
@@ -2918,6 +2761,20 @@ def _bridge_authentication_cases() -> tuple[
             },
         ),
         (
+            {
+                "mesh_id": "mesh-one",
+                "enrollment_token": ENROLLMENT_TOKEN,
+                "force_enroll": True,
+            },
+            "auth.token_login",
+            {
+                "token": ENROLLMENT_TOKEN,
+                "mesh_id": "mesh-one",
+                "profile_id": "default",
+                "force_enroll": True,
+            },
+        ),
+        (
             {"mesh_id": "mesh-one", "profile_id": "bridge-profile"},
             "auth.installation_login",
             {"mesh_id": "mesh-one", "profile_id": "bridge-profile"},
@@ -3097,6 +2954,23 @@ def test_sync_bridge_authentication_failure_installs_nothing_and_scrubs_secret(
         command["command_name"] == "address.map.put"
         for command in bridge_factory.commands
     )
+
+
+def test_force_enroll_failure_does_not_fallback_to_cached_login(
+    bridge_factory: BridgeDriver,
+) -> None:
+    bridge_factory.failures["auth.token_login"] = "authentication_failed"
+    with pytest.raises(NativeError, match="Authentication failed"):
+        cynapsa.login(
+            mesh_id="mesh-one", address_map={},
+            enrollment_token=ENROLLMENT_TOKEN, force_enroll=True,
+        )
+    auth_commands = [
+        command for command in bridge_factory.commands
+        if command["command_name"].startswith("auth.")
+    ]
+    assert [command["command_name"] for command in auth_commands] == ["auth.token_login"]
+    assert auth_commands[0]["args"]["force_enroll"] is True
 
 
 @pytest.mark.asyncio

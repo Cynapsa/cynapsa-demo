@@ -382,6 +382,13 @@ func TestStageBAcceptanceFailureTaxonomy(t *testing.T) {
 	session := newQAStageBEndpointSession("")
 	core := qaStageBCore(t, qaStageBEndpointDialer{session: session})
 	qaStageBAuthenticate(t, core, "qa-taxonomy-auth")
+	policy := qaStageBCompletion(t, core, v1.PolicySetCommand{
+		CommandBase: qaStageBBase("qa-policy-deny"),
+		Rules:       []v1.PolicyRule{{Action: v1.PolicyActionDeny, Path: "/denied", AgentID: "peer@example.test"}},
+	})
+	if !policy.OK {
+		t.Fatalf("set explicit deny policy = %#v", policy)
+	}
 
 	rejected := qaStageBCompletion(t, core, v1.MessageSendCommand{
 		CommandBase: qaStageBBase("qa-policy-rejected"), To: "peer@example.test",

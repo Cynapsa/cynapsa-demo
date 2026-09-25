@@ -496,6 +496,44 @@ def test_enrollment_shorthand_options_parse_before_and_after_target(
     assert calls[0]["enrollment_token"] == "token-value"
 
 
+@pytest.mark.parametrize("shorthand", [False, True])
+def test_force_enroll_is_consumed_by_cli_and_not_target(
+    shorthand: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    _patch_login(monkeypatch, calls=calls)
+    monkeypatch.setenv("CYNAPSA_TEST_TOKEN", "token-value")
+    output = tmp_path / "argv.json"
+    script = tmp_path / "myagent.py"
+    script.write_text(
+        "import json, sys\n"
+        f"open({str(output)!r}, 'w').write(json.dumps(sys.argv))\n",
+        encoding="utf-8",
+    )
+    cli_args = ["--mesh-id", "mesh-one", "--force-enroll", "--token-env", "CYNAPSA_TEST_TOKEN"]
+    target = ["--", "python", str(script), "target-arg"]
+    if shorthand:
+        cli_args = ["--mesh-id", "mesh-one", str(script), "--force-enroll", "--token-env", "CYNAPSA_TEST_TOKEN"]
+        target = ["--", "target-arg"]
+    assert cli.main(["run", *cli_args, *target]) == 0
+    assert calls[0]["force_enroll"] is True
+    assert json.loads(output.read_text(encoding="utf-8")) == [str(script), "target-arg"]
+
+
+@pytest.mark.parametrize("auth_args", [[], ["--mesh-endpoint", "mesh.example.test:5222", "--username", "agent@example.test", "--password-env", "CYNAPSA_TEST_PASSWORD"]])
+def test_force_enroll_without_token_fails_before_login(
+    auth_args: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    _patch_login(monkeypatch, calls=calls)
+    script = tmp_path / "app.py"
+    script.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["run", "--mesh-id", "mesh-one", "--force-enroll", *auth_args, "--", "python", str(script)])
+    assert raised.value.code == 2
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "auth_args",
     [

@@ -25,6 +25,8 @@ const (
 	profileKeyFile      = ".auth-v2.key"
 	profileLockFile     = ".auth-v2.lock"
 	profileFilePrefix   = "profile-v2-"
+	forceLockFilePrefix = ".auth-v2-force-"
+	forcePendingPrefix  = "cynapsa-internal/force-pending/v1/"
 )
 
 var profileMagic = [8]byte{'C', 'P', 'S', 'A', 'P', 'R', '0', '2'}
@@ -89,6 +91,30 @@ func (profile *Profile) Clear() {
 type ProfileStore interface {
 	LoadProfile(context.Context, string) (Profile, bool, error)
 	SaveProfile(context.Context, Profile) error
+	// LoadOrCreateProfile returns the stored profile and whether candidate was
+	// created. A stored profile is never overwritten, even if it differs.
+	LoadOrCreateProfile(context.Context, Profile) (profile Profile, created bool, err error)
+	// CompareAndSwapProfile replaces profileID only when its current
+	// InstallationID equals expectedInstallationID. An empty expected ID
+	// matches absence. On error the write may have taken effect; reload before
+	// retrying with any newly generated installation identity or secret.
+	CompareAndSwapProfile(context.Context, string, string, Profile) (swapped bool, err error)
+	// SwapProfileWithPrevious performs the same CAS and returns an owned copy
+	// of the profile it displaced. An absent-profile match returns a zero
+	// previous profile. After a matched read, a write/readback error returns
+	// that exact previous snapshot with swapped=false; the write outcome is
+	// unknown, so callers must inspect current state before rollback. Errors
+	// before the matched read (validation, lock, key, load) return zero previous.
+	SwapProfileWithPrevious(context.Context, string, string, Profile) (previous Profile, swapped bool, err error)
+	// CompareAndDeleteProfile deletes profileID only when its current
+	// InstallationID matches expectedInstallationID. An empty expected ID
+	// matches absence (and is a no-op). On error, reload to resolve outcome.
+	CompareAndDeleteProfile(context.Context, string, string) (deleted bool, err error)
+	// TryLockForceProfile acquires a nonblocking, per-profile operation lease.
+	// If acquired, release must be called when force enrollment finishes;
+	// repeated calls are safe. A contended lease returns (nil, false, nil). The lease is
+	// independent of the profile writer lock and may span network I/O.
+	TryLockForceProfile(context.Context, string) (release func(), acquired bool, err error)
 	DeleteLegacy(context.Context, []byte, string) error
 }
 
@@ -99,8 +125,35 @@ func ValidProfileID(value string) bool {
 	return value != "." && value != ".." && !strings.ContainsAny(value, "/\\")
 }
 
+// ForcePendingProfileID derives the private stored-profile slot for a public
+// profile ID. The result is deterministic but never a valid public profile ID.
+// Its only accepted grammar is forcePendingPrefix plus 64 lowercase hex digits.
+func ForcePendingProfileID(publicProfileID string) (string, error) {
+	if !ValidProfileID(publicProfileID) {
+		return "", ErrState
+	}
+	digest := sha256.Sum256([]byte("cynapsa-core/force-pending-profile/v1\x00" + publicProfileID))
+	return forcePendingPrefix + hex.EncodeToString(digest[:]), nil
+}
+
+func validStoredProfileID(value string) bool {
+	if ValidProfileID(value) {
+		return true
+	}
+	if len(value) != len(forcePendingPrefix)+2*sha256.Size || len(value) > maximumProfileID ||
+		!strings.HasPrefix(value, forcePendingPrefix) {
+		return false
+	}
+	for i := len(forcePendingPrefix); i < len(value); i++ {
+		if !(value[i] >= '0' && value[i] <= '9') && !(value[i] >= 'a' && value[i] <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func validateProfile(profile Profile) error {
-	if profile.Version != ProfileStateVersion || !ValidProfileID(profile.ProfileID) ||
+	if profile.Version != ProfileStateVersion || !validStoredProfileID(profile.ProfileID) ||
 		!ValidCanonicalUUID(profile.InstallationID) || !validCanonicalSecret(profile.InstallationSecret) ||
 		len(profile.Credentials) > maximumMeshCaches {
 		return ErrState
@@ -203,7 +256,7 @@ func decodeProfile(data []byte) (Profile, error) {
 }
 
 func profileFingerprint(profileID string) ([sha256.Size]byte, error) {
-	if !ValidProfileID(profileID) {
+	if !validStoredProfileID(profileID) {
 		return [sha256.Size]byte{}, ErrState
 	}
 	return sha256.Sum256([]byte("cynapsa-core/profile-state/v2\x00" + profileID)), nil
@@ -218,7 +271,7 @@ func profilePath(root, profileID string) (string, error) {
 }
 
 func (store *memoryStateStore) LoadProfile(ctx context.Context, profileID string) (Profile, bool, error) {
-	if ctx == nil || ctx.Err() != nil || !ValidProfileID(profileID) {
+	if ctx == nil || ctx.Err() != nil || !validStoredProfileID(profileID) {
 		return Profile{}, false, ErrState
 	}
 	store.mu.Lock()
@@ -238,6 +291,85 @@ func (store *memoryStateStore) SaveProfile(ctx context.Context, profile Profile)
 	}
 	store.profiles[profile.ProfileID] = profile.Clone()
 	return nil
+}
+
+func (store *memoryStateStore) LoadOrCreateProfile(ctx context.Context, candidate Profile) (Profile, bool, error) {
+	if store == nil || ctx == nil || ctx.Err() != nil || validateProfile(candidate) != nil {
+		return Profile{}, false, ErrState
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if ctx.Err() != nil {
+		return Profile{}, false, ErrState
+	}
+	if existing, ok := store.profiles[candidate.ProfileID]; ok {
+		return existing.Clone(), false, nil
+	}
+	stored := candidate.Clone()
+	store.profiles[candidate.ProfileID] = stored
+	return stored.Clone(), true, nil
+}
+
+func (store *memoryStateStore) CompareAndSwapProfile(ctx context.Context, profileID, expectedInstallationID string, replacement Profile) (bool, error) {
+	previous, swapped, err := store.SwapProfileWithPrevious(ctx, profileID, expectedInstallationID, replacement)
+	previous.Clear()
+	return swapped, err
+}
+
+func (store *memoryStateStore) SwapProfileWithPrevious(ctx context.Context, profileID, expectedInstallationID string, replacement Profile) (Profile, bool, error) {
+	if store == nil || ctx == nil || ctx.Err() != nil || !validProfileSwap(profileID, expectedInstallationID, replacement) {
+		return Profile{}, false, ErrState
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if ctx.Err() != nil {
+		return Profile{}, false, ErrState
+	}
+	current, found := store.profiles[profileID]
+	if !profileInstallationMatches(current, found, expectedInstallationID) {
+		return Profile{}, false, nil
+	}
+	var previous Profile
+	if found {
+		previous = current.Clone()
+	}
+	store.profiles[profileID] = replacement.Clone()
+	current.Clear()
+	return previous, true, nil
+}
+
+func (store *memoryStateStore) CompareAndDeleteProfile(ctx context.Context, profileID, expectedInstallationID string) (bool, error) {
+	if store == nil || ctx == nil || ctx.Err() != nil || !validProfileExpectation(profileID, expectedInstallationID) {
+		return false, ErrState
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if ctx.Err() != nil {
+		return false, ErrState
+	}
+	current, found := store.profiles[profileID]
+	if !found || !profileInstallationMatches(current, true, expectedInstallationID) {
+		return false, nil
+	}
+	delete(store.profiles, profileID)
+	current.Clear()
+	return true, nil
+}
+
+func validProfileExpectation(profileID, expectedInstallationID string) bool {
+	return validStoredProfileID(profileID) && (expectedInstallationID == "" || ValidCanonicalUUID(expectedInstallationID))
+}
+
+func validProfileSwap(profileID, expectedInstallationID string, replacement Profile) bool {
+	return validProfileExpectation(profileID, expectedInstallationID) &&
+		replacement.ProfileID == profileID && validateProfile(replacement) == nil
+}
+
+func profileInstallationMatches(current Profile, found bool, expectedInstallationID string) bool {
+	if expectedInstallationID == "" {
+		return !found
+	}
+	return found && current.InstallationID == expectedInstallationID
 }
 
 func (store *memoryStateStore) DeleteLegacy(ctx context.Context, token []byte, meshID string) error {
@@ -265,8 +397,7 @@ func (store *fileStateStore) LoadProfile(ctx context.Context, profileID string) 
 	if err != nil {
 		return Profile{}, false, ErrState
 	}
-	path, err := profilePath(root, profileID)
-	if err != nil {
+	if !validStoredProfileID(profileID) {
 		return Profile{}, false, ErrState
 	}
 	key, err := loadOrCreateProfileKey(root, store.random)
@@ -274,6 +405,14 @@ func (store *fileStateStore) LoadProfile(ctx context.Context, profileID string) 
 		return Profile{}, false, ErrState
 	}
 	defer clear(key)
+	return readStoredProfile(root, key, profileID)
+}
+
+func readStoredProfile(root string, key []byte, profileID string) (Profile, bool, error) {
+	path, err := profilePath(root, profileID)
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
 	data, found, err := readPrivateFile(path)
 	if err != nil || !found {
 		return Profile{}, found, err
@@ -305,11 +444,21 @@ func (store *fileStateStore) SaveProfile(ctx context.Context, profile Profile) e
 		return ErrState
 	}
 	defer unlock()
+	if ctx.Err() != nil {
+		return ErrState
+	}
 	key, err := loadOrCreateProfileKey(root, store.random)
 	if err != nil {
 		return ErrState
 	}
 	defer clear(key)
+	return store.writeProfile(ctx, root, key, profile)
+}
+
+// writeProfile requires the profile writer lock. A failed write can still have
+// renamed the new file before a directory sync failed, so callers must not
+// infer that the old profile remains on disk from an error.
+func (store *fileStateStore) writeProfile(ctx context.Context, root string, key []byte, profile Profile) error {
 	plaintext, err := encodeProfile(profile)
 	if err != nil {
 		return ErrState
@@ -322,7 +471,178 @@ func (store *fileStateStore) SaveProfile(ctx context.Context, profile Profile) e
 	}
 	defer clear(sealed)
 	path, _ := profilePath(root, profile.ProfileID)
-	return atomicPrivateWrite(ctx, root, path, sealed, store.random)
+	write := atomicPrivateWrite
+	if store.profileAtomicWrite != nil {
+		write = store.profileAtomicWrite
+	}
+	return write(ctx, root, path, sealed, store.random)
+}
+
+func (store *fileStateStore) LoadOrCreateProfile(ctx context.Context, candidate Profile) (Profile, bool, error) {
+	if store == nil || ctx == nil || ctx.Err() != nil || validateProfile(candidate) != nil {
+		return Profile{}, false, ErrState
+	}
+	root, err := secureStateRoot()
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	unlock, err := lockProfileRoot(root)
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	defer unlock()
+	if ctx.Err() != nil {
+		return Profile{}, false, ErrState
+	}
+	key, err := loadOrCreateProfileKey(root, store.random)
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	defer clear(key)
+	existing, found, err := readStoredProfile(root, key, candidate.ProfileID)
+	if err != nil || found {
+		return existing, false, err
+	}
+	if err := store.writeProfile(ctx, root, key, candidate); err != nil {
+		// Rename may have succeeded before directory sync reported failure.
+		// A matching readback plus a successful sync resolves that outcome.
+		if !verifiedProfileWrite(root, key, candidate) {
+			return Profile{}, false, ErrState
+		}
+	}
+	stored, found, err := readStoredProfile(root, key, candidate.ProfileID)
+	if err != nil || !found || !profilesEqual(stored, candidate) {
+		stored.Clear()
+		return Profile{}, false, ErrState
+	}
+	return stored, true, nil
+}
+
+func (store *fileStateStore) CompareAndSwapProfile(ctx context.Context, profileID, expectedInstallationID string, replacement Profile) (bool, error) {
+	previous, swapped, err := store.SwapProfileWithPrevious(ctx, profileID, expectedInstallationID, replacement)
+	previous.Clear()
+	return swapped, err
+}
+
+func (store *fileStateStore) SwapProfileWithPrevious(ctx context.Context, profileID, expectedInstallationID string, replacement Profile) (Profile, bool, error) {
+	if store == nil || ctx == nil || ctx.Err() != nil || !validProfileSwap(profileID, expectedInstallationID, replacement) {
+		return Profile{}, false, ErrState
+	}
+	root, err := secureStateRoot()
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	unlock, err := lockProfileRoot(root)
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	defer unlock()
+	if ctx.Err() != nil {
+		return Profile{}, false, ErrState
+	}
+	key, err := loadOrCreateProfileKey(root, store.random)
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	defer clear(key)
+	current, found, err := readStoredProfile(root, key, profileID)
+	if err != nil {
+		return Profile{}, false, ErrState
+	}
+	defer current.Clear()
+	if !profileInstallationMatches(current, found, expectedInstallationID) {
+		return Profile{}, false, nil
+	}
+	var previous Profile
+	if found {
+		previous = current.Clone()
+	}
+	if err := store.writeProfile(ctx, root, key, replacement); err != nil {
+		if !verifiedProfileWrite(root, key, replacement) {
+			return previous, false, ErrState
+		}
+	}
+	stored, found, err := readStoredProfile(root, key, profileID)
+	if err != nil || !found || !profilesEqual(stored, replacement) {
+		stored.Clear()
+		return previous, false, ErrState
+	}
+	stored.Clear()
+	return previous, true, nil
+}
+
+func (store *fileStateStore) CompareAndDeleteProfile(ctx context.Context, profileID, expectedInstallationID string) (bool, error) {
+	if store == nil || ctx == nil || ctx.Err() != nil || !validProfileExpectation(profileID, expectedInstallationID) {
+		return false, ErrState
+	}
+	root, err := secureStateRoot()
+	if err != nil {
+		return false, ErrState
+	}
+	unlock, err := lockProfileRoot(root)
+	if err != nil {
+		return false, ErrState
+	}
+	defer unlock()
+	if ctx.Err() != nil {
+		return false, ErrState
+	}
+	key, err := loadOrCreateProfileKey(root, store.random)
+	if err != nil {
+		return false, ErrState
+	}
+	defer clear(key)
+	current, found, err := readStoredProfile(root, key, profileID)
+	if err != nil {
+		return false, ErrState
+	}
+	defer current.Clear()
+	if !found || !profileInstallationMatches(current, true, expectedInstallationID) {
+		return false, nil
+	}
+	path, _ := profilePath(root, profileID)
+	if err := os.Remove(path); err != nil {
+		return false, ErrState
+	}
+	// Once removed, a failed directory sync is also an uncertain outcome.
+	// Retry after verifying absence while still holding the writer lock.
+	if !verifiedProfileDelete(root, key, profileID) {
+		return false, ErrState
+	}
+	return true, nil
+}
+
+func verifiedProfileWrite(root string, key []byte, expected Profile) bool {
+	stored, found, err := readStoredProfile(root, key, expected.ProfileID)
+	defer stored.Clear()
+	return err == nil && found && profilesEqual(stored, expected) && syncProfileRoot(root) == nil
+}
+
+func verifiedProfileDelete(root string, key []byte, profileID string) bool {
+	stored, found, err := readStoredProfile(root, key, profileID)
+	defer stored.Clear()
+	return err == nil && !found && syncProfileRoot(root) == nil
+}
+
+func syncProfileRoot(root string) error {
+	directory, err := os.Open(root)
+	if err != nil {
+		return ErrState
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil || closeErr != nil {
+		return ErrState
+	}
+	return nil
+}
+
+func profilesEqual(a, b Profile) bool {
+	aBytes, aErr := encodeProfile(a)
+	bBytes, bErr := encodeProfile(b)
+	defer clear(aBytes)
+	defer clear(bBytes)
+	return aErr == nil && bErr == nil && bytes.Equal(aBytes, bBytes)
 }
 
 func (store *fileStateStore) DeleteLegacy(ctx context.Context, token []byte, meshID string) error {

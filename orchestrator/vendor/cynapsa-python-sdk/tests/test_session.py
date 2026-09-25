@@ -329,6 +329,55 @@ def test_token_connect_uses_selected_profile_without_sdk_instance(
         driver.stop()
 
 
+def test_force_token_connect_sends_flag(
+    fake_library: FakeLibrary, native_factory: None
+) -> None:
+    driver = CompletionDriver(fake_library).start()
+    session = cynapsa.connect(
+        mesh_id="mesh-one", enrollment_token=ENROLLMENT_TOKEN, force_enroll=True
+    )
+    try:
+        auth = next(item for item in driver.commands if item["command_name"] == "auth.token_connect")
+        assert auth["args"]["force_enroll"] is True
+        assert not any(item["command_name"] == "auth.installation_connect" for item in driver.commands)
+    finally:
+        session.close()
+        driver.stop()
+
+
+@pytest.mark.asyncio
+async def test_force_token_connect_async_sends_flag(
+    fake_library: FakeLibrary, native_factory: None
+) -> None:
+    driver = CompletionDriver(fake_library).start()
+    session = await cynapsa.connect_async(
+        mesh_id="mesh-one", enrollment_token=ENROLLMENT_TOKEN, force_enroll=True
+    )
+    try:
+        auth = next(item for item in driver.commands if item["command_name"] == "auth.token_connect")
+        assert auth["args"]["force_enroll"] is True
+    finally:
+        await session.close()
+        driver.stop()
+
+
+@pytest.mark.parametrize("credentials", [{}, AUTH])
+def test_force_connect_requires_token_and_rejects_legacy_before_core_create(
+    credentials: dict[str, object], fake_library: FakeLibrary, native_factory: None
+) -> None:
+    with pytest.raises(ValueError, match="force_enroll requires enrollment_token"):
+        cynapsa.connect(mesh_id="mesh-one", force_enroll=True, **{k: v for k, v in credentials.items() if k != "mesh_id"})
+    assert fake_library.calls["core_create"] == 0
+
+
+def test_force_connect_rejects_mixed_credentials_before_core_create(
+    fake_library: FakeLibrary, native_factory: None
+) -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        cynapsa.connect(**AUTH, enrollment_token=ENROLLMENT_TOKEN, force_enroll=True)
+    assert fake_library.calls["core_create"] == 0
+
+
 def test_legacy_connect_has_empty_v2_auth_metadata(
     fake_library: FakeLibrary, native_factory: None
 ) -> None:

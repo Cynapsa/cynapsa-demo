@@ -29,9 +29,10 @@ type ConfigUpdateArgs struct {
 func (ConfigUpdateArgs) commandArgs() {}
 
 type TokenAuthArgs struct {
-	Token     []byte
-	MeshID    string
-	ProfileID string
+	Token       []byte
+	MeshID      string
+	ProfileID   string
+	ForceEnroll bool
 }
 
 func (TokenAuthArgs) commandArgs() {}

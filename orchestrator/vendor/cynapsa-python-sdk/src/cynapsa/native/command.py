@@ -723,7 +723,7 @@ def _canonical_command_args(command_name: str, value: object) -> dict[str, Any]:
             "agent_instance_id": _bounded_string(args["agent_instance_id"], "agent_instance_id", allow_empty=True),
         }
     if command_name in {"auth.token_login", "auth.token_connect"}:
-        args = _optional_mapping(value, ("token", "mesh_id", "profile_id"), "args")
+        args = _optional_mapping(value, ("token", "mesh_id", "profile_id", "force_enroll"), "args")
         if "token" not in args or "mesh_id" not in args:
             raise ValueError("args has unknown or missing fields")
         output = {
@@ -734,6 +734,8 @@ def _canonical_command_args(command_name: str, value: object) -> dict[str, Any]:
         }
         if "profile_id" in args:
             output["profile_id"] = _validate_profile_id(args["profile_id"])
+        if "force_enroll" in args:
+            output["force_enroll"] = _boolean(args["force_enroll"], "force_enroll")
         return output
     if command_name in {"auth.installation_login", "auth.installation_connect"}:
         args = _exact_mapping(value, ("profile_id", "mesh_id"), "args")

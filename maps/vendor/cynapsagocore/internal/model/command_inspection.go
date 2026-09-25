@@ -55,6 +55,7 @@ func inspectCommandArgs(inspector *commandInspector, input CommandArgs) bool {
 		inspector.byteSlice(value.Token)
 		inspector.string(value.MeshID)
 		inspector.string(value.ProfileID)
+		inspector.boolean(value.ForceEnroll)
 		return inspector.valid()
 	case InstallationAuthArgs:
 		if !inspectType[InstallationAuthArgs](inspector, 27) {

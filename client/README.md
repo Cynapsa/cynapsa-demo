@@ -29,7 +29,16 @@ precedence over the value in `.env`.
 ```sh
 ./run.sh          # build if needed, then run
 ./run.sh --build  # force a rebuild from this directory
+./run.sh --force-enroll  # enroll a new installation after mesh removal/re-add
 ```
+
+`--force-enroll` needs a still-valid `CYNAPSA_TOKEN` in `.env` or the shell. It
+replaces the installation in the selected Docker volume using the bundled
+`cynapsa run --force-enroll` command. That CLI session closes before the
+native client opens its connection from the new profile.
+The bundled SDK includes force-enroll and native remote-error handling. After
+changing bundled source, rebuild with `./run.sh --build` and restart any
+running container; subsequent runs reuse the rebuilt image.
 
 `DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` are required. This keeps the
 same image reusable for any mesh and orchestrator identity.

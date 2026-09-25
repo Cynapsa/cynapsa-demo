@@ -14,10 +14,11 @@ from runtime import connection_options, orchestrator_agent_id
 def main() -> None:
     parser = argparse.ArgumentParser(description="Cynapsa demo client")
     parser.add_argument("--enroll", action="store_true")
+    parser.add_argument("--force-enroll", action="store_true")
     args = parser.parse_args()
     target = orchestrator_agent_id()
 
-    with cynapsa.connect(**connection_options(enroll=args.enroll)) as session:
+    with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session:
         print(f"demo-client ready as {session.agent_id}", flush=True)
         while True:
             try:

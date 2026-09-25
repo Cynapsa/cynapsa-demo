@@ -93,6 +93,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     token.add_argument("--token-file", metavar="PATH")
     token.add_argument("--token-stdin", action="store_true")
     token.add_argument("--token-prompt", action="store_true")
+    parser.add_argument("--force-enroll", action="store_true")
     parser.add_argument(
         "--map",
         action="append",
@@ -187,6 +188,8 @@ def _authentication_selection(args: argparse.Namespace) -> _AuthenticationSelect
         for value in (args.mesh_endpoint, args.username, password_source)
     )
     enrollment_selected = token_source is not None
+    if args.force_enroll and not enrollment_selected:
+        raise _UsageError("--force-enroll requires an enrollment token source")
     if legacy_selected and enrollment_selected:
         raise _UsageError(
             "enrollment token sources cannot be combined with legacy credentials"
@@ -296,6 +299,7 @@ _OPTION_ARITY = {
     "--token-file": 1,
     "--token-stdin": 0,
     "--token-prompt": 0,
+    "--force-enroll": 0,
     "--map": 3,
     "--allow": 2,
     "--command-timeout-ms": 1,
@@ -698,6 +702,7 @@ def _run(args: argparse.Namespace, target_args: Sequence[str]) -> int:
                 handle = cynapsa.login(
                     enrollment_token=secret_box.pop(),
                     profile_id=profile_id,
+                    **({"force_enroll": True} if args.force_enroll else {}),
                     **common,
                 )
             else:

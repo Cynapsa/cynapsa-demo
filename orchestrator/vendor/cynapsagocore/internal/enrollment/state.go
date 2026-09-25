@@ -74,13 +74,14 @@ type StateStore interface {
 }
 
 type memoryStateStore struct {
-	mu       sync.Mutex
-	records  map[[sha256.Size]byte]State
-	profiles map[string]Profile
+	mu          sync.Mutex
+	records     map[[sha256.Size]byte]State
+	profiles    map[string]Profile
+	forceLeases map[string]struct{}
 }
 
 func NewMemoryStateStore() StateStore {
-	return &memoryStateStore{records: make(map[[sha256.Size]byte]State), profiles: make(map[string]Profile)}
+	return &memoryStateStore{records: make(map[[sha256.Size]byte]State), profiles: make(map[string]Profile), forceLeases: make(map[string]struct{})}
 }
 
 func (store *memoryStateStore) Load(ctx context.Context, token []byte, meshID string) (State, bool, error) {
@@ -114,7 +115,12 @@ func (store *memoryStateStore) Save(ctx context.Context, token []byte, state Sta
 	return nil
 }
 
-type fileStateStore struct{ random io.Reader }
+type fileStateStore struct {
+	random io.Reader
+	// profileAtomicWrite is a package-private I/O seam for post-rename fault tests.
+	// Production stores leave it nil and use atomicPrivateWrite.
+	profileAtomicWrite func(context.Context, string, string, []byte, io.Reader) error
+}
 
 // NewProductionStateStore resolves its root lazily so Core construction stays
 // free of authentication state and I/O. TokenLogin fails closed if the root

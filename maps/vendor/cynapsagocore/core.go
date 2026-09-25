@@ -92,7 +92,9 @@ func newCoreWithConnectivityEnrollmentAndState(config Config, boundary *sdkbound
 		payloads.Close()
 		return nil, boundary.MapFailure(err, sdkboundary.FailureCommand)
 	}
-	policies, err := mesh.NewPolicyController(nil)
+	// Mesh membership is authorized by the server handshake. The local
+	// application policy is permissive until an application replaces it.
+	policies, err := mesh.NewPolicyController([]model.PolicyRule{{Action: "allow"}})
 	if err != nil {
 		payloads.Close()
 		return nil, boundary.MapFailure(err, sdkboundary.FailureCommand)

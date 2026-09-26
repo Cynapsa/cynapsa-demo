@@ -1,8 +1,0 @@
-**/__pycache__/
-*.py[cod]
-Python/build/
-Python/dist/
-Python/*.egg-info/
-Python/src/*.egg-info/
-TypeScript/dist/
-TypeScript/node_modules/

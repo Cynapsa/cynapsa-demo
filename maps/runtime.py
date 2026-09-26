@@ -48,21 +48,25 @@ def prepare_runtime() -> None:
     os.environ["CYNAPSA_STATE_DIRECTORY"] = str(STATE.resolve())
 
 
-def gemini_key() -> str:
-    return _secure_file("gemini_api_key")
+def litellm_key() -> str:
+    return _secure_file("litellm_api_key")
 
 
 def google_maps_key() -> str:
     return _secure_file("google_maps_api_key")
 
 
-def connection_options(*, enroll: bool) -> dict[str, str | int]:
+def connection_options(*, enroll: bool, force_enroll: bool = False) -> dict[str, str | int | bool]:
+    if force_enroll and not enroll:
+        raise RuntimeError("force enrollment requires an enrollment token")
     mesh_id = _required_environment("DEMO_MESH_ID")
-    options: dict[str, str | int] = {
+    options: dict[str, str | int | bool] = {
         "mesh_id": mesh_id,
         "profile_id": "demo-maps",
         "rpc_timeout_ms": 110_000,
     }
     if enroll:
         options["enrollment_token"] = _secure_file("enrollment_token")
+    if force_enroll:
+        options["force_enroll"] = True
     return options

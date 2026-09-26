@@ -2,16 +2,39 @@
 
 ARG GO_IMAGE=golang:1.26-bookworm
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+FROM alpine:3.23 AS sources
+RUN apk add --no-cache ca-certificates git
+COPY github-askpass.sh /usr/local/bin/cynapsa-git-askpass
+RUN chmod 0555 /usr/local/bin/cynapsa-git-askpass
+ARG SOURCE_REFRESH
+RUN --mount=type=secret,id=github_token,required=true \
+    set -eu; \
+    : "$SOURCE_REFRESH"; \
+    export GIT_ASKPASS=/usr/local/bin/cynapsa-git-askpass GIT_TERMINAL_PROMPT=0; \
+    git clone --quiet --depth 1 --single-branch --branch remove-snapshot \
+      https://github.com/Cynapsa/cynapsagocore.git /src/core; \
+    git clone --quiet --depth 1 --single-branch --branch remove-snapshot \
+      https://github.com/Cynapsa/cynapsa-python-sdk.git /src/sdk; \
+    printf 'go_core=%s\nsdk=%s\n' \
+      "$(git -C /src/core rev-parse HEAD)" "$(git -C /src/sdk rev-parse HEAD)" \
+      >/src/source-revisions
+
 FROM ${GO_IMAGE} AS core-builder
 WORKDIR /src/core
-COPY vendor/cynapsagocore/ ./
+COPY --from=sources /src/core/ ./
 RUN GOTOOLCHAIN=auto CGO_ENABLED=1 go build -trimpath -buildmode=c-shared \
     -o /out/libcynapsacore.so ./cmd/cynapsacore-shared
 
 FROM ${PYTHON_IMAGE} AS sdk-builder
 WORKDIR /src/sdk
-RUN python -m pip install --no-cache-dir build
-COPY vendor/cynapsa-python-sdk/ ./
+RUN apt-get update && apt-get install --no-install-recommends -y git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir build
+COPY --from=sources /src/sdk/ ./
+COPY --from=sources /src/core/ /src/core/
+# Branch builds validate the fetched working tree's public contract hashes;
+# the SDK's historical pinned SHA may not exist in this depth-1 clone.
+RUN python scripts/verify_core_provenance.py --core-checkout /src/core --commit WORKTREE
 RUN python -m build --wheel --outdir /out
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -30,7 +53,8 @@ COPY --from=sdk-builder /out/*.whl /tmp/wheels/
 RUN python -m pip install --no-cache-dir -r requirements.txt /tmp/wheels/*.whl \
     && rm -rf /tmp/wheels
 COPY --from=core-builder /out/libcynapsacore.so /opt/cynapsa/libcynapsacore.so
-COPY app.py places.py runtime.py entrypoint.sh ./
+COPY --from=sources /src/source-revisions /opt/cynapsa/source-revisions
+COPY app.py bootstrap.py connection_alerts.py llm.py places.py runtime.py entrypoint.sh ./
 RUN chmod 0555 /app/entrypoint.sh /opt/cynapsa/libcynapsacore.so
 
 USER 65532:65532

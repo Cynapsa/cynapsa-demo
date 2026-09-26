@@ -11,9 +11,9 @@ RUN --mount=type=secret,id=github_token,required=true \
     set -eu; \
     : "$SOURCE_REFRESH"; \
     export GIT_ASKPASS=/usr/local/bin/cynapsa-git-askpass GIT_TERMINAL_PROMPT=0; \
-    git clone --quiet --depth 1 --single-branch --branch remove-snapshot \
+    git clone --quiet --depth 1 --single-branch --branch main \
       https://github.com/Cynapsa/cynapsagocore.git /src/core; \
-    git clone --quiet --depth 1 --single-branch --branch remove-snapshot \
+    git clone --quiet --depth 1 --single-branch --branch main \
       https://github.com/Cynapsa/cynapsa-python-sdk.git /src/sdk; \
     printf 'go_core=%s\nsdk=%s\n' \
       "$(git -C /src/core rev-parse HEAD)" "$(git -C /src/sdk rev-parse HEAD)" \

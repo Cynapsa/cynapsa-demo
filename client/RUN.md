@@ -6,7 +6,7 @@ worker pools were previously observed at zero instances, not checked for this
 audit. You need Docker and a Cynapsa
 enrollment token. The
 application and Docker build live in this directory. The Python SDK and Go
-Core are fetched from their `remove-snapshot` GitHub branches during the
+Core are fetched from their `main` GitHub branches during the
 image build.
 
 ## Requirements
@@ -26,7 +26,7 @@ tracked repository file.
 ## Download only the client
 
 ```sh
-git clone --branch remove-snapshot-local-demo --filter=blob:none --sparse https://github.com/Cynapsa/cynapsa-demo.git
+git clone --branch main --filter=blob:none --sparse https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo
 git sparse-checkout set client
 cd client

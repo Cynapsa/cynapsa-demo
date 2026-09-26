@@ -12,7 +12,7 @@ case "$(docker version --format '{{.Server.Arch}}')" in
   *) echo "Unsupported Docker architecture." >&2; exit 69 ;;
 esac
 
-IMAGE=${CYNAPSA_DEMO_ORCHESTRATOR_IMAGE:-cynapsa-demo-$ROLE:github-remove-snapshot-$ARCH}
+IMAGE=${CYNAPSA_DEMO_ORCHESTRATOR_IMAGE:-cynapsa-demo-$ROLE:github-main-$ARCH}
 ENV_FILE=${CYNAPSA_DEMO_ORCHESTRATOR_ENV_FILE:-$ROOT/.env}
 ACTIVE_VOLUME_FILE=$ROOT/.private/active-volume
 force_enroll=false

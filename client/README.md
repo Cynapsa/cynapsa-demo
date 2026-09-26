@@ -30,7 +30,7 @@ cp .env.example .env
 ./run.sh
 ```
 
-The runner fetches SDK and Go Core `remove-snapshot` from GitHub when the image
+The runner fetches SDK and Go Core `main` from GitHub when the image
 is missing. Set `CYNAPSA_GITHUB_TOKEN` in this directory's ignored `.env`
 for builds; it is not passed to the running container. The enrollment token
 is passed as a runtime environment variable and enrolls the client only when

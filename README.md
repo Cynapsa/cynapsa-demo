@@ -39,7 +39,7 @@ container entirely from that directory when its local image is missing. No
 credentials, enrollment tokens, or Cynapsa installation profiles are committed
 to this repository.
 
-Each build fetches the current `remove-snapshot` branches of the SDK and
+Each build fetches the current `main` branches of the SDK and
 Go Core directly from GitHub. These builds
 require an ejabberd authority with the matching peer-handshake protocol; they
 are not compatible with a server still running the old snapshot protocol.
@@ -129,7 +129,7 @@ overwriting the first one. Each identity's README contains an example.
 
 ## Rebuilds
 
-Use `./run.sh --build` to fetch fresh `remove-snapshot` branch heads and
+Use `./run.sh --build` to fetch fresh `main` branch heads and
 rebuild. `CYNAPSA_DEMO_PLATFORM` remains available for an explicit Docker
 target platform. The default image tag distinguishes these GitHub-backed
 builds from old vendored images. If you set a custom image tag, run
@@ -138,7 +138,7 @@ image is missing.
 
 See each directory's `SOURCE_DEPENDENCIES.md` for build provenance and
 source-versus-local limits. A direct `./build.sh` defaults to a `:local` tag,
-whereas `run.sh` defaults to `:github-remove-snapshot-<Docker-server-arch>`;
+whereas `run.sh` defaults to `:github-main-<Docker-server-arch>`;
 use `run.sh --build` or set the same image override when building separately.
 
 ## Runtime limits and errors

@@ -12,7 +12,7 @@ case "$(docker version --format '{{.Server.Arch}}')" in
   *) echo "Unsupported Docker architecture." >&2; exit 69 ;;
 esac
 
-IMAGE=${CYNAPSA_DEMO_CLIENT_IMAGE:-cynapsa-demo-$ROLE:cli-force-enroll-$ARCH}
+IMAGE=${CYNAPSA_DEMO_CLIENT_IMAGE:-cynapsa-demo-$ROLE:github-remove-snapshot-$ARCH}
 ENV_FILE=${CYNAPSA_DEMO_CLIENT_ENV_FILE:-$ROOT/.env}
 ACTIVE_VOLUME_FILE=$ROOT/.private/active-volume
 force_enroll=false
@@ -34,16 +34,8 @@ else
   VOLUME=cynapsa-demo-$ROLE-state
 fi
 
-if [[ $force_enroll == true ]] &&
-   { ! grep -q 'parser.add_argument("--force-enroll"' "$ROOT/vendor/cynapsa-python-sdk/src/cynapsa/_cli.py" ||
-     ! grep -q 'force_enroll: bool = False' "$ROOT/vendor/cynapsa-python-sdk/src/cynapsa/session.py" ||
-     ! grep -q 'ForceEnroll bool' "$ROOT/vendor/cynapsagocore/api/v1/auth.go"; }; then
-  echo "Bundled SDK/Core source lacks force-enroll; wait for the finalized vendor sync." >&2
-  exit 78
-fi
-
 if [[ $build_requested == true ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "Building the self-contained $ROLE image..."
+  echo "Building the GitHub-backed $ROLE image..."
   CYNAPSA_DEMO_CLIENT_IMAGE="$IMAGE" "$ROOT/build.sh"
 fi
 
@@ -53,7 +45,17 @@ docker_args=(
   -it
   --mount "type=volume,src=$VOLUME,dst=/var/lib/cynapsa"
 )
-[[ ! -f "$ENV_FILE" ]] || docker_args+=(--env-file "$ENV_FILE")
+runtime_env=
+cleanup() {
+  [[ -z "$runtime_env" ]] || rm -f -- "$runtime_env"
+}
+trap cleanup EXIT
+if [[ -f "$ENV_FILE" ]]; then
+  runtime_env=$(mktemp "${TMPDIR:-/tmp}/cynapsa-demo-$ROLE-runtime.XXXXXX")
+  chmod 0600 "$runtime_env"
+  awk '$0 !~ /^[[:space:]]*CYNAPSA_GITHUB_TOKEN=/' "$ENV_FILE" > "$runtime_env"
+  docker_args+=(--env-file "$runtime_env")
+fi
 for variable in CYNAPSA_TOKEN DEMO_MESH_ID DEMO_ORCHESTRATOR_AGENT_ID; do
   [[ -z ${!variable:-} ]] || docker_args+=(--env "$variable")
 done

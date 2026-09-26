@@ -2,19 +2,25 @@
 
 The client runs on your laptop and communicates with locally running maps and
 orchestrator agents over Cynapsa. Start those two containers first; their GCP
-worker pools are disabled at zero instances. You need Docker and a Cynapsa
+worker pools were previously observed at zero instances, not checked for this
+audit. You need Docker and a Cynapsa
 enrollment token. The
-application, Python SDK source, and Go Core source are all included in this
-directory and built into its image.
+application and Docker build live in this directory. The Python SDK and Go
+Core are fetched from their `remove-snapshot` GitHub branches during the
+image build.
 
 ## Requirements
 
 - Git
 - Docker Desktop, running before you start the client
+- Docker Buildx/BuildKit for GitHub-backed image builds
 - A client agent in the `cynapsa-demo` mesh
 - An active enrollment token for that client agent
 
-Treat the token like a password. Never commit `.env` or paste the token into a
+Also put `CYNAPSA_GITHUB_TOKEN` with read access to both repositories in
+the ignored `.env` for builds. The GitHub token is build-only and is not
+passed to the running container. Treat both tokens like passwords. Never
+commit `.env` or paste a token into a
 tracked repository file.
 
 ## Download only the client
@@ -69,15 +75,23 @@ mesh, re-add the agent, supply a still-valid token, and run
 `./run.sh --force-enroll`. This runs `cynapsa run --force-enroll` against the
 same Docker volume, then starts the native client from the replaced profile.
 Later ordinary runs use
-the same volume. The bundled SDK/Core source matches the reviewer-approved source;
-no image was built during this sync. Use `./run.sh --build` once if the image
-tag already exists; retries reuse the image.
+the same volume. Use `./run.sh --build` to fetch newer branch commits;
+ordinary retries reuse the existing image.
+
+Stop the old container before replacement. A retained enrollment grant can
+still expire, be independently revoked, or lack installation capacity. A saved
+profile suppresses ordinary enrollment, not server revocation or credential
+expiry checks. Do not copy the profile to another replica.
 
 ## Rebuild the image
 
 ```sh
 ./run.sh --build
 ```
+
+This fetches remote branch heads, not unpushed SDK/Core edits. Check
+[SOURCE_DEPENDENCIES.md](SOURCE_DEPENDENCIES.md) before claiming a local fix is
+included. An existing running container retains its original image.
 
 ## Test another token without losing the current installation
 

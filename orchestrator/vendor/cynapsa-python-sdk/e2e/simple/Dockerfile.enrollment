@@ -1,7 +1,0 @@
-FROM python:3.13-slim-bookworm
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY e2e/simple/mock_enrollment.py /opt/cynapsa-e2e/mock_enrollment.py
-RUN chmod 0555 /opt/cynapsa-e2e/mock_enrollment.py
-ENTRYPOINT ["python", "/opt/cynapsa-e2e/mock_enrollment.py"]

@@ -3,9 +3,11 @@
 This identity exposes a wildcard native Cynapsa handler and uses an
 OpenAI-compatible LiteLLM gateway with Google Places (New) to answer place questions.
 
-The directory is independently runnable and includes its own pinned Python SDK
-and Go Core source. It does not use repository-root files, sibling directories,
-or external SDK/Core checkouts.
+The directory is independently runnable. Its image build fetches the Python
+SDK and Go Core `remove-snapshot` branches from GitHub; it does not use
+repository-root files or sibling directories. Set `CYNAPSA_GITHUB_TOKEN`
+in this directory's ignored `.env` for builds. It is not sent to the
+running container.
 
 ## Run
 
@@ -42,14 +44,33 @@ CYNAPSA_TOKEN='another-enrollment-token' \
 ```
 
 Remove `CYNAPSA_TOKEN` from `.env` before using the shell-token example above.
-The Cloud Run worker pool `cynapsa-demo-maps` is disabled at zero instances.
+The Cloud Run worker pool `cynapsa-demo-maps` was previously observed at zero
+instances; current status was not verified by this documentation audit.
 For a new local installation, use an empty state volume and an active
 enrollment grant whose mesh scope and installation limit allow it. The
 existing volume uses its saved installation proof, not `CYNAPSA_TOKEN`.
 After mesh removal and re-addition, that proof is revoked. Supply a still-valid
 token and run `./run.sh --force-enroll` to replace the installation through
-the bundled `cynapsa run --force-enroll` CLI in the same selected volume. The
+the built-in `cynapsa run --force-enroll` CLI in the same selected volume. The
 CLI session closes before the native maps agent starts from the new profile.
-The bundled SDK includes force-enroll and native remote-error handling. After
-changing bundled source, rebuild with `./run.sh --build` and restart any
+The fetched SDK includes force-enroll and native remote-error handling. After
+the SDK/Core branches change, rebuild with `./run.sh --build` and restart any
 running container; subsequent runs reuse the rebuilt image.
+
+## Model/tool and delivery bounds
+
+The working-tree app allows three model rounds and at most ten tool calls per
+round. The first round must call a tool. Details IDs must come from a prior
+search; search queries are 1–300 characters with up to five results, and detail
+IDs are 1–256 characters. No Routes/Roads API is provided. Missing/invalid tools
+return 502 `maps_tool_error`; exhausted rounds return `maps_no_answer`; Places
+failures return `places_unavailable`; model failures return 503
+`model_unavailable`. Invalid questions return 400 `bad_request`.
+
+Tool diagnostics record bounded round/call/reason categories, not arguments or
+place IDs. Model/Places HTTP timeouts are 25/10 seconds per client operation,
+not a total completion guarantee. Saved installation state is not unlimited
+authority: expired credentials and server revocation can reject it.
+Exact pending-session replay is best effort; there is no offline mailbox.
+See [source dependencies](SOURCE_DEPENDENCIES.md): remote SDK/Core builds do
+not include unpushed local changes by assumption.

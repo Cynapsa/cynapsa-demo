@@ -6,8 +6,9 @@ import importlib
 import importlib.util
 import json
 import logging
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -17,7 +18,20 @@ MAPS = Path(__file__).resolve().parents[1] / "maps"
 
 
 def _maps_app(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.syspath_prepend(str(MAPS / "vendor" / "cynapsa-python-sdk" / "src"))
+    # These tests exercise maps-tool diagnostics, not the SDK transport.
+    # Avoid requiring a vendored SDK in this standalone demo checkout.
+    if importlib.util.find_spec("cynapsa") is None:
+        sdk_stub = ModuleType("cynapsa")
+
+        class RPCException(Exception):
+            def __init__(self, status_code, *, code, detail):
+                super().__init__(detail)
+                self.status_code = status_code
+                self.code = code
+                self.detail = detail
+
+        sdk_stub.RPCException = RPCException
+        monkeypatch.setitem(sys.modules, "cynapsa", sdk_stub)
     monkeypatch.syspath_prepend(str(MAPS))
     runtime = importlib.import_module("runtime")
     monkeypatch.setattr(runtime, "prepare_runtime", lambda: None)

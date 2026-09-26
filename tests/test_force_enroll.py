@@ -51,41 +51,36 @@ class ForceEnrollTests(unittest.TestCase):
                     '#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
                     'if [ "$1" = version ]; then printf "amd64\\n"; fi\n'
                     'if [ "$1 $2" = "image inspect" ] && '
-                    '[ "${TEST_IMAGE_MISSING:-}" = 1 ]; then exit 1; fi\n',
+                    '[ "${TEST_IMAGE_MISSING:-}" = 1 ]; then exit 1; fi\n'
+                    'if [ "$1" = run ]; then\n'
+                    '  while [ "$#" -gt 0 ]; do\n'
+                    '    if [ "$1" = --env-file ]; then\n'
+                    '      shift\n'
+                    '      if grep -q "^CYNAPSA_GITHUB_TOKEN=" "$1"; then exit 72; fi\n'
+                    '    fi\n'
+                    '    shift\n'
+                    '  done\n'
+                    'fi\n',
                     encoding="utf-8",
                 )
                 fake_docker.chmod(0o755)
-                fake_grep = scratch_path / "grep"
-                fake_grep.write_text(
-                    '#!/bin/sh\nif [ "${TEST_NATIVE_MARKERS:-}" = 1 ]; then exit 0; fi\n'
-                    'exec /usr/bin/grep "$@"\n',
-                    encoding="utf-8",
-                )
-                fake_grep.chmod(0o755)
                 env = os.environ.copy()
                 env.pop("CYNAPSA_TOKEN", None)
+                env.pop("CYNAPSA_GITHUB_TOKEN", None)
+                demo_env = scratch_path / "runner.env"
+                demo_env.write_text(
+                    "CYNAPSA_GITHUB_TOKEN=test-only-github-token\n"
+                    "DEMO_MESH_ID=test-mesh\n", encoding="utf-8"
+                )
                 env.update({
                     "PATH": f"{scratch}{os.pathsep}{env['PATH']}",
                     "DOCKER_LOG": str(log),
-                    f"CYNAPSA_DEMO_{role.upper()}_ENV_FILE": str(scratch_path / "missing.env"),
+                    f"CYNAPSA_DEMO_{role.upper()}_ENV_FILE": str(demo_env),
                     f"CYNAPSA_DEMO_{role.upper()}_VOLUME": f"test-{role}-state",
                 })
                 runner = ["bash", str(ROOT / role / "run.sh")]
                 normal = subprocess.run(runner, env=env, capture_output=True, text=True)
                 self.assertEqual(normal.returncode, 0, normal.stderr)
-                native_available = (
-                    'parser.add_argument("--force-enroll"' in (ROOT / role / "vendor/cynapsa-python-sdk/src/cynapsa/_cli.py").read_text(encoding="utf-8")
-                    and
-                    "force_enroll: bool = False" in (ROOT / role / "vendor/cynapsa-python-sdk/src/cynapsa/session.py").read_text(encoding="utf-8")
-                    and "ForceEnroll bool" in (ROOT / role / "vendor/cynapsagocore/api/v1/auth.go").read_text(encoding="utf-8")
-                )
-                if not native_available:
-                    blocked = subprocess.run(
-                        runner + ["--force-enroll"], env=env, capture_output=True, text=True
-                    )
-                    self.assertEqual(blocked.returncode, 78)
-                    self.assertIn("wait for the finalized vendor sync", blocked.stderr)
-                env["TEST_NATIVE_MARKERS"] = "1"
                 forced = subprocess.run(
                     runner + ["--force-enroll"], env=env, capture_output=True, text=True
                 )
@@ -100,6 +95,7 @@ class ForceEnrollTests(unittest.TestCase):
                 self.assertIn("--env DEMO_FORCE_ENROLL=1", runs[1])
                 self.assertFalse(any(call.startswith("buildx ") for call in calls))
                 self.assertNotIn("DEMO_ENROLL_ONLY", "\n".join(calls))
+                self.assertNotIn("test-only-github-token", "\n".join(calls))
 
                 explicit = subprocess.run(
                     runner + ["--build"], env=env, capture_output=True, text=True
@@ -115,6 +111,10 @@ class ForceEnrollTests(unittest.TestCase):
                 self.assertEqual(
                     sum(call.startswith("buildx ") for call in log.read_text(encoding="utf-8").splitlines()),
                     2,
+                )
+                self.assertIn(
+                    "--secret id=github_token,env=CYNAPSA_GITHUB_TOKEN",
+                    log.read_text(encoding="utf-8"),
                 )
 
     def test_entrypoint_runs_cli_force_enroll_before_native_app(self) -> None:

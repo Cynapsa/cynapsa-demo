@@ -1,5 +1,0 @@
-FROM alpine:3.23
-RUN apk add --no-cache iproute2 iptables
-COPY e2e/simple/router-entrypoint.sh /usr/local/bin/cynapsa-router-entrypoint
-RUN chmod 0555 /usr/local/bin/cynapsa-router-entrypoint
-ENTRYPOINT ["/usr/local/bin/cynapsa-router-entrypoint"]

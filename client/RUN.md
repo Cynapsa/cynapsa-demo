@@ -61,7 +61,17 @@ After the prompt appears, ask a question such as:
 Where is the nearest gym to 12201 Park Drive, Hollywood, Florida?
 ```
 
-Enter `quit` to close the client.
+Follow up with questions such as "Which of those is closest?"; the
+orchestrator remembers successful turns in this conversation. Enter `new` to
+start a fresh chat, or `quit` to close the client.
+
+The client prints a conversation ID at startup. To resume that chat after a
+restart, set `DEMO_CONVERSATION_ID` in this client's `.env` to the printed ID,
+then run `./run.sh`. You must use the same logical client identity, mesh, and
+orchestrator identity, and retain the orchestrator's state volume. Without
+this optional setting, each client run starts a new chat. The Python program
+also accepts `--conversation-id`, while the container runner uses `.env`.
+Changing the ID starts a different chat; it does not erase earlier history.
 
 ## Later runs
 

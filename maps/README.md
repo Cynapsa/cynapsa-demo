@@ -1,7 +1,20 @@
 # Demo maps agent
 
+Console alerts observe the SDK event stream independently of request handling
+and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
+by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
+and canonical `core.error` details are also printed when emitted. A disconnect
+alone does not identify revocation; the app is not automatically terminated.
+The observer owns `next_event()` and stops before intentional session teardown.
+Rebuild with `./run.sh --build` after the updated demo and Core sources have
+been pushed; existing images do not gain these changes automatically.
+
 This identity exposes a wildcard native Cynapsa handler and uses an
 OpenAI-compatible LiteLLM gateway with Google Places (New) to answer place questions.
+Its independent LangGraph alternates model reasoning and Places tool nodes,
+then formats the final answer. Each request has fresh graph state; conversation
+memory belongs to the orchestrator. Only JSON RPC data crosses Cynapsa, not
+graph objects or shared process memory.
 
 The directory is independently runnable. Its image build fetches the Python
 SDK and Go Core `remove-snapshot` branches from GitHub; it does not use

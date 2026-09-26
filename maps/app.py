@@ -5,17 +5,19 @@ import json
 import logging
 import os
 import threading
-from typing import Any
+from typing import Any, TypedDict
 
 from runtime import prepare_runtime
 
 prepare_runtime()
 
 import cynapsa
+from langgraph.graph import END, START, StateGraph
 
 from llm import ModelClient, ModelError
 from places import GooglePlaces, PlacesError
 from runtime import connection_options, google_maps_key, litellm_key
+from connection_alerts import watch_connection
 
 
 LOG = logging.getLogger(__name__)
@@ -71,32 +73,49 @@ def _invalid_tool_request(round_index: int, call_index: int | None, reason: str)
     )
 
 
+class MapsState(TypedDict):
+    history: list[dict[str, Any]]
+    round_index: int
+    known_ids: set[str]
+    sources: list[dict[str, Any]]
+    result: dict[str, Any]
+    output: dict[str, Any]
+
+
 def answer_question(question: str, client: ModelClient, places: GooglePlaces) -> dict[str, Any]:
-    history: list[dict[str, Any]] = [
-        {"role": "developer", "content": INSTRUCTIONS},
-        {"role": "user", "content": question},
-    ]
-    known_ids: set[str] = set()
-    sources: list[dict[str, Any]] = []
-    for round_index in range(3):
+    def reason(state: MapsState) -> dict[str, Any]:
+        round_index = state["round_index"]
+        if round_index >= 3:
+            raise cynapsa.RPCException(
+                502, code="maps_no_answer", detail="The maps agent could not finish an answer"
+            )
         result = client.complete(
-            history, tools=TOOLS, tool_choice="required" if round_index == 0 else "auto"
+            state["history"], tools=TOOLS,
+            tool_choice="required" if round_index == 0 else "auto",
         )
         calls = result.get("tool_calls") or []
         if not isinstance(calls, list):
             raise _invalid_tool_request(round_index, None, "invalid_call_list")
         if len(calls) > 10:
             raise _invalid_tool_request(round_index, None, "too_many_calls")
-        if not calls:
-            if round_index == 0:
-                raise _invalid_tool_request(round_index, None, "missing_initial_tool_call")
-            answer = result.get("content")
-            answer = answer.strip() if isinstance(answer, str) else ""
-            if answer:
-                unique = list({source["google_maps_url"]: source for source in sources}.values())
-                return {"answer": answer, "sources": unique, "attribution": "Google Maps"}
-            break
-        history.append({"role": "assistant", "content": result.get("content"), "tool_calls": calls})
+        if round_index == 0 and not calls:
+            raise _invalid_tool_request(round_index, None, "missing_initial_tool_call")
+        return {
+            "result": result,
+            "history": state["history"] + [{
+                "role": "assistant", "content": result.get("content"), "tool_calls": calls,
+            }],
+        }
+
+    def route(state: MapsState) -> str:
+        return "places_tools" if state["result"].get("tool_calls") else "finish"
+
+    def places_tools(state: MapsState) -> dict[str, Any]:
+        history = list(state["history"])
+        known_ids = set(state["known_ids"])
+        sources = list(state["sources"])
+        round_index = state["round_index"]
+        calls = state["result"]["tool_calls"]
         for call_index, call in enumerate(calls):
             reason = "invalid_call_shape"
             try:
@@ -143,9 +162,42 @@ def answer_question(question: str, client: ModelClient, places: GooglePlaces) ->
                 "role": "tool", "tool_call_id": call["id"],
                 "content": json.dumps({"result": tool_result}),
             })
-    raise cynapsa.RPCException(
-        502, code="maps_no_answer", detail="The maps agent could not finish an answer"
-    )
+        return {
+            "history": history, "known_ids": known_ids, "sources": sources,
+            "round_index": round_index + 1,
+        }
+
+    def finish(state: MapsState) -> dict[str, Any]:
+        answer = state["result"].get("content")
+        answer = answer.strip() if isinstance(answer, str) else ""
+        if not answer:
+            raise cynapsa.RPCException(
+                502, code="maps_no_answer", detail="The maps agent could not finish an answer"
+            )
+        unique = list({
+            source["google_maps_url"]: source for source in state["sources"]
+        }.values())
+        return {"output": {"answer": answer, "sources": unique, "attribution": "Google Maps"}}
+
+    builder = StateGraph(MapsState)
+    builder.add_node("reason", reason)
+    builder.add_node("places_tools", places_tools)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "reason")
+    builder.add_conditional_edges("reason", route, {
+        "places_tools": "places_tools", "finish": "finish",
+    })
+    builder.add_edge("places_tools", "reason")
+    builder.add_edge("finish", END)
+    graph = builder.compile()
+    result = graph.invoke({
+        "history": [
+            {"role": "developer", "content": INSTRUCTIONS},
+            {"role": "user", "content": question},
+        ],
+        "round_index": 0, "known_ids": set(), "sources": [], "result": {}, "output": {},
+    }, {"recursion_limit": 12})
+    return result["output"]
 
 
 def main() -> None:
@@ -157,7 +209,7 @@ def main() -> None:
     model_client = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
     places = GooglePlaces(google_maps_key())
     try:
-        with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session:
+        with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session, watch_connection(session, "demo-maps"):
             @session.on("*")
             def receive(request: cynapsa.CynapsaRequest) -> dict:
                 try:

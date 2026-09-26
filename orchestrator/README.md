@@ -1,8 +1,24 @@
 # Demo orchestrator
 
+Console alerts observe the SDK event stream independently of request handling
+and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
+by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
+and canonical `core.error` details are also printed when emitted. A disconnect
+alone does not identify revocation; the app is not automatically terminated.
+The observer owns `next_event()` and stops before intentional session teardown.
+Rebuild with `./run.sh --build` after the updated demo and Core sources have
+been pushed; existing images do not gain these changes automatically.
+
 This identity accepts `/ask` RPCs from the demo client. An OpenAI-compatible
 LiteLLM gateway decides whether to answer directly or call the maps identity
-over Cynapsa.
+over Cynapsa. A local LangGraph manages reasoning, the remote tool call, and
+final answer composition. Maps runs its own graph on its own machine; it is
+not an in-process subgraph.
+The async native SDK must dispatch handlers on the persistent loop that owns
+the session, graph, and SQLite saver. Keep that loop running through
+`await session.close()`; per-request `asyncio.run()` dispatch is incompatible
+with reused async locks. This requires the async-dispatch fix on the SDK's
+`remove-snapshot` branch; rebuilding against an older SDK does not include it.
 Downstream native and canonical remote errors are logged with their actual
 status, code, message, and public details in this agent's terminal. The client
 receives the generic `The demo could not answer` RPC error for those downstream
@@ -63,6 +79,37 @@ CLI session closes before the native orchestrator starts from the new profile.
 The fetched SDK includes force-enroll and native remote-error handling. After
 the SDK/Core branches change, rebuild with `./run.sh --build` and restart any
 running container; subsequent runs reuse the rebuilt image.
+
+## Conversation memory
+
+Send `{"prompt": "...", "conversation_id": "..."}` to `/ask`. The client
+creates and prints the ID, uses it for every turn, and accepts `new` to start
+a fresh chat. Requests without an ID still work, but each gets a fresh ID
+returned in the response. IDs contain 1–64 letters/numbers/underscores/hyphens.
+
+LangGraph's async SQLite checkpointer stores state in
+`/var/lib/cynapsa/conversations.sqlite`, inside the existing orchestrator
+volume. Restarting/rebuilding the container preserves memory when the volume
+is retained. Threads are scoped to this orchestrator's canonical identity,
+authenticated sender, mesh, and conversation ID—not sender fields from JSON.
+A different client cannot access your history by guessing your ID. A new
+installation of the same logical client can resume a chat using the same ID.
+
+The model sees the last eight successful user/assistant turn pairs; stored
+answer context is capped at 4,000 characters per turn. It can use a remembered
+address to formulate a self-contained Maps question. Maps itself is stateless,
+and old map evidence is not treated as a fresh Places lookup. Failed turns
+do not enter the successful history; later turns start fresh rather than
+automatically retrying an interrupted RPC.
+
+This is persistent conversation memory, not a cross-chat user-profile store.
+Checkpoint records can grow on disk even though model context is bounded.
+The file is mode 0600 in a private directory, but is not encrypted like the
+Cynapsa credential profile. Protect the volume: prompts/answers/tool evidence
+are private. `new` does not delete old checkpoints. One process owns the file
+and serializes requests; shared-volume replicas/distributed memory and disk
+retention policies are not implemented. See
+[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence).
 
 ## Model/tool and error bounds
 

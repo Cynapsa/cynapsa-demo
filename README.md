@@ -1,10 +1,19 @@
 # Cynapsa Demo
 
+Console alerts observe the SDK event stream independently of request handling
+and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
+by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
+and canonical `core.error` details are also printed when emitted. A disconnect
+alone does not identify revocation; the app is not automatically terminated.
+The observer owns `next_event()` and stops before intentional session teardown.
+Rebuild with `./run.sh --build` after the updated demo and Core sources have
+been pushed; existing images do not gain these changes automatically.
+
 This repository contains three independent native Cynapsa identities:
 
 - [`client/`](client/) — an interactive laptop client.
-- [`orchestrator/`](orchestrator/) — routes user questions and delegates map work.
-- [`maps/`](maps/) — answers place questions with the LiteLLM gateway and Google Places.
+- [`orchestrator/`](orchestrator/) — LangGraph reasoning with persistent conversation memory and a remote Maps tool.
+- [`maps/`](maps/) — an independent LangGraph using the LiteLLM gateway and Google Places.
 
 AI agents and operators should follow [`AGENTS.md`](AGENTS.md) for the complete
 startup order, runtime variables, state-volume rules, and verification signals.
@@ -14,6 +23,14 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
                                                                    |
                                                                    +--> Google Places API
 ```
+
+Each server runs its own local graph and can live on a different machine.
+The only inter-agent connection is native Cynapsa RPC. The orchestrator
+checkpoints conversations in SQLite inside its existing state volume;
+it sends relevant context in a self-contained Maps question, not shared graph
+state. The client prints a conversation ID; `new` starts a fresh chat and
+`DEMO_CONVERSATION_ID` resumes one. See the
+[orchestrator memory contract](orchestrator/README.md#conversation-memory).
 
 Every directory is independently runnable. It has its own application source,
 configuration, Dockerfile, entrypoint, dependencies, documentation, `run.sh`,
@@ -28,13 +45,11 @@ require an ejabberd authority with the matching peer-handshake protocol; they
 are not compatible with a server still running the old snapshot protocol.
 
 “Current” above means the remote heads fetched at build time, not uncommitted
-or unpushed local SDK/Core edits. At the 2026-09-26 audit, the latest local-policy
-removal was not yet pushed in the SDK/Core; a GitHub
-build must not be described as containing that removal until the remote source
-is verified and rebuilt. This demo's working-tree apps/scripts contain no local
-policy override, but that does not prove the fetched SDK exposes no allowance
-API. No remote head, image build, cloud deployment, or live RPC was verified by
-this documentation audit.
+or unpushed local SDK/Core edits. Local-policy removal, the SDK async-loop fix,
+and Core connectivity events have been published on those branches. An existing
+container still uses its original sources: rebuild and verify the recorded SDK
+and Core SHAs before assuming it includes a new fix. Local tests and source
+review do not qualify a cloud deployment or prove live revocation behavior.
 
 ## Run one identity
 
@@ -42,7 +57,7 @@ Clone the repository, enter the identity directory, and create its ignored
 environment file. For example, to run the client:
 
 ```sh
-git clone --branch remove-snapshot-local-demo https://github.com/Cynapsa/cynapsa-demo.git
+git clone https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo/client
 cp .env.example .env
 # Edit .env and replace the placeholders.

@@ -32,7 +32,9 @@ RUN apt-get update && apt-get install --no-install-recommends -y git \
     && python -m pip install --no-cache-dir build
 COPY --from=sources /src/sdk/ ./
 COPY --from=sources /src/core/ /src/core/
-RUN python scripts/verify_core_provenance.py --core-checkout /src/core
+# Branch builds validate the fetched working tree's public contract hashes;
+# the SDK's historical pinned SHA may not exist in this depth-1 clone.
+RUN python scripts/verify_core_provenance.py --core-checkout /src/core --commit WORKTREE
 RUN python -m build --wheel --outdir /out
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -55,7 +57,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt /tmp/wheels/*.whl \
 
 COPY --from=core-builder /out/libcynapsacore.so /opt/cynapsa/libcynapsacore.so
 COPY --from=sources /src/source-revisions /opt/cynapsa/source-revisions
-COPY app.py bootstrap.py runtime.py entrypoint.sh ./
+COPY app.py bootstrap.py connection_alerts.py runtime.py entrypoint.sh ./
 RUN chmod 0555 /app/entrypoint.sh /opt/cynapsa/libcynapsacore.so
 
 USER 65532:65532

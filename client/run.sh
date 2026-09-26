@@ -56,7 +56,7 @@ if [[ -f "$ENV_FILE" ]]; then
   awk '$0 !~ /^[[:space:]]*CYNAPSA_GITHUB_TOKEN=/' "$ENV_FILE" > "$runtime_env"
   docker_args+=(--env-file "$runtime_env")
 fi
-for variable in CYNAPSA_TOKEN DEMO_MESH_ID DEMO_ORCHESTRATOR_AGENT_ID; do
+for variable in CYNAPSA_TOKEN DEMO_MESH_ID DEMO_ORCHESTRATOR_AGENT_ID DEMO_CONVERSATION_ID; do
   [[ -z ${!variable:-} ]] || docker_args+=(--env "$variable")
 done
 

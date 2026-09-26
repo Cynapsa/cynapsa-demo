@@ -11,18 +11,21 @@ as a BuildKit secret. The token needs read access to both repositories. It is
 not a build argument, image layer, or runtime environment variable.
 
 `./run.sh --build` refetches both branches. The image records the two commit
-IDs at `/opt/cynapsa/source-revisions`. The SDK build verifies that its Go
-Core provenance manifest matches the fetched Go Core checkout; if the branches
-are incompatible, the build fails instead of silently mixing versions.
+IDs at `/opt/cynapsa/source-revisions`. The SDK build verifies its vendored
+header/conformance hashes against the fetched Core working tree using
+`verify_core_provenance.py --commit WORKTREE`. This permits implementation-only
+branch updates without requiring the SDK's historical pinned commit in a
+depth-1 clone. It is a public-contract compatibility check, not equality to
+that historical commit; the recorded SHAs identify the actual sources.
+Incompatible headers/conformance still fail the build.
 ## Source versus local changes
 
 The Dockerfile clones remote `remove-snapshot` heads, never a sibling checkout,
-vendored tree, or unpushed local SDK/Core edit. At the 2026-09-26 audit,
-the latest local-policy removal was not yet pushed in the SDK/Core. Do not
-claim a GitHub-built image includes it until the fetched remote revision is
-verified. The demo's local apps/scripts contain no authorization override;
-that alone says nothing about the fetched SDK's public API. This audit did not
-fetch branches, build an image, or verify a deployed revision.
+vendored tree, or unpushed local SDK/Core edit. Local-policy removal, the SDK
+async-loop fix, and Core connectivity events are published on those branches.
+Existing containers are not updated by a source push: rebuild and verify the
+recorded revisions. Source review and local tests do not qualify a deployment
+or prove live revocation behavior.
 
 ## Runner/build details
 
@@ -40,7 +43,7 @@ publish Docker/process environment inspection.
 clone steps. Other layers may be cached. The recorded SDK/Core SHAs identify
 those two sources only; mutable base images and package versions mean this is
 not a fully reproducible dependency lock. The provenance check fails if the
-fetched SDK manifest and Core checkout do not agree; never bypass it.
+fetched SDK manifest hashes and Core contract files do not agree; never bypass it.
 
 `run.sh` builds only for a missing selected image or `--build`; `--force-enroll`
 is not a rebuild flag. Direct `build.sh` defaults to the role's `:local` tag,

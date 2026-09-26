@@ -8,10 +8,11 @@ Dockerfiles, images, commits, logs, or documentation.
 
 This runbook describes the local working-tree implementation, not verified
 GitHub heads or deployed cloud status. Builds clone remote SDK/Core branch
-heads; unpushed local changes do not enter the image. At the 2026-09-26 audit,
-the latest local-policy removal was not yet pushed in the SDK/Core.
-Do not claim that a GitHub-built SDK contains it until its fetched
-revision is verified. Enrollment is owned separately and remains read-only here.
+heads; unpushed local changes do not enter the image. Local-policy removal,
+the SDK async-loop fix, and Core connectivity events are published on those
+branches. Verify an image's recorded revisions after rebuilding; publishing
+source does not update existing containers or prove cloud deployment status.
+Enrollment is owned separately and remains read-only here.
 
 Start server identities before the interactive client:
 
@@ -257,6 +258,21 @@ an active enrollment grant with capacity for a new installation.
 
 ## Expected failure signals
 
+All three entities own one SDK `next_event()` consumer for console alerts.
+It runs in a background thread in maps/client and an async task in the
+orchestrator, separately from handlers and user input. Do not add another
+competing `next_event()` consumer without event fan-out.
+Connectivity and SDK lifecycle transitions print an `ALERT`; canonical
+`core.error` events print their real code, stage, retryability, source and
+message. Connectivity is normalized Core health, not per-peer reachability
+or a precise server-side reason. Do not label every disconnect as revocation.
+Observers stop before intentional session teardown; disconnects do not
+automatically terminate these application processes.
+Alerts are best-effort observations on bounded SDK queues, not a durable
+audit log or an authorization/keepalive mechanism.
+The Core connectivity-event producer must be included in the fetched Core
+revision before a GitHub-built image can show live connection transitions.
+
 - `Docker is required`: install Docker.
 - `Docker is not running`: start the Docker engine.
 - `an enrollment token is required`: the selected volume has no profile and
@@ -268,6 +284,24 @@ an active enrollment grant with capacity for a new installation.
   the required Google APIs are enabled.
 
 ## Application and delivery bounds
+
+Both servers use independent LangGraph `StateGraph` workflows; all remote
+tools remain native Cynapsa RPCs. The client has no graph. `/ask` carries a
+client-selected `conversation_id`, isolated by authenticated sender/mesh and
+the orchestrator's canonical identity. Async SQLite checkpoints persist in
+the orchestrator volume (`conversations.sqlite`, 0600; not encrypted). The
+model context is the last eight successful turn pairs, with remembered answer
+text capped at 4,000 characters. Failed turns do not enter successful history.
+Checkpoint disk retention is unbounded; protect this private volume.
+One process owns it and serializes turns; no distributed/shared-volume memory.
+The async native SDK dispatches handlers on the session's creating loop.
+That loop owns the shared graph and saver and must remain running until async
+session teardown completes. Synchronous handlers remain on worker threads.
+Do not create a new loop per request around these shared async resources.
+These local application checkpoints are unrelated to removed mesh snapshots.
+The client prints an ID, accepts `new`, and uses optional
+`DEMO_CONVERSATION_ID` to resume a chat after restart. Read each entity's README
+for the memory contract. No extra server endpoint or direct HTTP link is added.
 
 Maps uses at most three model rounds and ten tool calls per round. The first
 round must call a tool; details IDs must come from a previous search. Invalid
@@ -289,3 +323,18 @@ mesh/organization mismatch is forbidden. Peer revoke application needs its
 separate 30-second action ACK. Stream resume can replay an exact pending queue,
 but final expiry has no mailbox/reroute and accepted sends are not custody
 receipts. Local mock checks do not prove remote builds or live delivery.
+
+## Local async-dispatch regression
+
+`tests/test_sdk_graph_dispatch.py` exercises real SDK inbound workers with
+real LangGraph/SQLite memory. Ingress, acceptance/reply transport, model, and
+remote Maps RPC are fake; no credentials or live services are used. Install
+the intended SDK or select its source checkout explicitly:
+
+```sh
+PYTHONPATH=/path/to/cynapsa-python-sdk/src .venv/bin/python -m pytest -q
+```
+
+Without the SDK installed, this dispatch test skips. Other mock-session tests
+are not a substitute. The test forces saver-lock contention, repeated turns,
+the remote-tool path, concurrent arrivals, and worker teardown.

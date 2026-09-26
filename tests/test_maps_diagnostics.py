@@ -38,6 +38,9 @@ def _maps_app(monkeypatch: pytest.MonkeyPatch):
     spec = importlib.util.spec_from_file_location("demo_maps_diagnostic_app", MAPS / "app.py")
     assert spec is not None and spec.loader is not None
     app = importlib.util.module_from_spec(spec)
+    # LangGraph resolves TypedDict annotations through the defining module,
+    # just as a normal Python import does.
+    monkeypatch.setitem(sys.modules, spec.name, app)
     spec.loader.exec_module(app)
     return app
 
@@ -121,3 +124,34 @@ def test_ten_tool_calls_are_allowed_but_eleven_are_rejected(
     assert failure.value.code == "maps_tool_error"
     assert "reason=too_many_calls" in caplog.text
     assert places.search.call_count == 10
+
+
+def test_graph_searches_then_gets_details_and_formats_answer(monkeypatch):
+    app = _maps_app(monkeypatch)
+    client = SimpleNamespace(complete=Mock(side_effect=[
+        {"tool_calls": [_call("search_places", '{"query":"gym"}', "c1")]},
+        {"tool_calls": [_call("get_place_details", '{"place_id":"known-id"}', "c2")]},
+        {"content": "Gym A is nearby."},
+    ]))
+    places = SimpleNamespace(
+        search=Mock(return_value={"places": [{"id": "known-id", "google_maps_url": "https://maps.example/gym"}]}),
+        details=Mock(return_value={"id": "known-id", "name": "Gym A", "google_maps_url": "https://maps.example/gym"}),
+    )
+    result = app.answer_question("Find a gym", client, places)
+    assert result["answer"] == "Gym A is nearby."
+    assert result["sources"] == [places.details.return_value]
+    places.details.assert_called_once_with("known-id")
+    assert client.complete.call_count == 3
+
+
+def test_graph_stops_after_three_model_rounds(monkeypatch):
+    app = _maps_app(monkeypatch)
+    client = SimpleNamespace(complete=Mock(return_value={
+        "tool_calls": [_call("search_places", '{"query":"gym"}', "c1")],
+    }))
+    places = SimpleNamespace(search=Mock(return_value={"places": []}))
+    with pytest.raises(app.cynapsa.RPCException) as failure:
+        app.answer_question("Find a gym", client, places)
+    assert failure.value.code == "maps_no_answer"
+    assert client.complete.call_count == 3
+    assert places.search.call_count == 3

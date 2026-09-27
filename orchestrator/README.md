@@ -113,14 +113,27 @@ retention policies are not implemented. See
 
 ## Model/tool and error bounds
 
-The app accepts zero or exactly one `ask_maps_agent` tool call; it validates
-the question (1–2000 characters) and call ID, invokes `/maps` with a
-100,000-ms TTL, then performs one final model completion without another tool
-loop. Invalid/extra tool calls fail; they are not silently retried. The model
-HTTP client uses a 25-second timeout, not a whole-RPC completion guarantee.
+The graph loops `reason -> agent_tools -> reason` until the model returns a final
+answer. Each question allows at most four remote tool calls in total, to Maps or
+the optional Files agent. Both tool schemas remain available after each result,
+so Files can supply a city for a subsequent Maps search in the same question.
+Multiple calls in a model response run sequentially after the entire batch is
+validated; dependent lookups should be requested in separate reasoning rounds.
+Questions must contain 1–2000 characters, and call IDs must be nonempty and unique
+within the turn. Unknown/malformed/over-budget batches fail before any calls in
+that batch are sent. Remote failures are propagated, not automatically retried.
+At four calls, the next model completion uses `tool_choice=none`; an attempted
+extra call is rejected. The prompt requires honest partial-result reporting at
+the limit, not invented missing information. There are at most five model
+completions. Each downstream RPC retains a 100,000-ms TTL and the model HTTP
+client retains a 25-second timeout. These are not a whole-question deadline:
+the client's existing 140,000-ms `/ask` TTL can expire during a slow chain.
+Successful answers retain both `files` and `maps` evidence; repeated calls to
+the same agent retain earlier citations. The final answer alone enters successful
+conversation history. A failed chain is not resumed/replayed by a later turn.
 
 Bad request input returns 400 `bad_request`, maps/native safety timeouts return
-504 `maps_timeout`, and model failures return 503 `model_unavailable`.
+504 `agent_timeout`, and model failures return 503 `model_unavailable`.
 Downstream canonical remote/native errors and other internal failures return
 502 `orchestrator_failed`; their actual details/traces remain in this terminal.
 The destination must be a complete canonical **bare** JID, not a friendly alias
@@ -131,3 +144,17 @@ Saved profiles take precedence over new tokens during ordinary runs but can
 still fail credential expiry/attachment checks. Stop the old container before
 force-enrolling a replacement in the same volume. See
 [source dependencies](SOURCE_DEPENDENCIES.md) for remote-versus-local changes.
+## Optional files agent
+
+Set `DEMO_FILES_AGENT_ID` to its canonical bare JID to enable `ask_files_agent`.
+Blank/absent preserves maps-only operation. Private-document questions should
+use this tool; place searches use Maps. Combined questions can chain Files then
+Maps within the four-call budget, without another user prompt. For example,
+“Find Guy's home city and recommend cafes there” should retrieve the city, search
+Maps using it, and return both facts and citations in one final answer.
+File results are returned under `files`, with source paths/line evidence for the
+client. Existing `maps` responses and identity-scoped conversation memory remain.
+Downstream timeout is now 504 `agent_timeout`; detailed downstream errors are
+logged locally while the client receives the existing generic 502 failure.
+Rebuild/restart after application changes. File excerpts and answers may be
+retained in the orchestrator/model context; see `../files/README.md` for privacy.

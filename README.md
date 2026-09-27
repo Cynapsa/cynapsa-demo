@@ -9,11 +9,12 @@ The observer owns `next_event()` and stops before intentional session teardown.
 Rebuild with `./run.sh --build` after the updated demo and Core sources have
 been pushed; existing images do not gain these changes automatically.
 
-This repository contains three independent native Cynapsa identities:
+This repository contains four independent native Cynapsa identities:
 
 - [`client/`](client/) — an interactive laptop client.
 - [`orchestrator/`](orchestrator/) — LangGraph reasoning with persistent conversation memory and a remote Maps tool.
 - [`maps/`](maps/) — an independent LangGraph using the LiteLLM gateway and Google Places.
+- [`files/`](files/) — a read-only LangGraph agent searching a configured local document directory.
 
 AI agents and operators should follow [`AGENTS.md`](AGENTS.md) for the complete
 startup order, runtime variables, state-volume rules, and verification signals.
@@ -22,6 +23,8 @@ startup order, runtime variables, state-volume rules, and verification signals.
 client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
                                                                    |
                                                                    +--> Google Places API
+                              |
+                              +--Cynapsa RPC /files--> files --> read-only documents
 ```
 
 Each server runs its own local graph and can live on a different machine.
@@ -152,9 +155,12 @@ independent grant revocation, or capacity can still prevent enrollment.
 
 The maps app permits three model rounds with at most ten tool calls per round,
 requires a first-round tool call, and accepts details only for an ID from a
-prior search. The orchestrator accepts zero or exactly one `ask_maps_agent`
-call, followed by a final completion; neither app promises a complete answer
-within arbitrary tool chains. HTTP client timeouts are 25 seconds for the model
+prior search. The orchestrator allows up to four `ask_maps_agent`/`ask_files_agent`
+calls per question, returning to reasoning with both tools after each result.
+At the limit, one final completion runs with tools disabled; further calls fail.
+These apps do not promise a complete answer within arbitrary tool chains.
+The client `/ask` TTL remains 140 seconds; slow chains can exceed it.
+HTTP client timeouts are 25 seconds for the model
 and 10 seconds for Places, not whole-request wall-clock guarantees.
 
 The client prints canonical remote response errors or native/safety errors and
@@ -180,3 +186,21 @@ not an offline installation mailbox or application delivery receipt.
   inject the same values from their managed secret store.
 - Revoke unused installations and rotate credentials that may have been
   exposed outside their intended environment.
+
+## Optional file database
+
+Follow [files/README.md](files/README.md) to configure `DEMO_FILES_DIRECTORY`,
+its enrollment token, and its LLM key. The runner binds that directory read-only;
+supported files are UTF-8 text, Markdown, CSV, and JSON. Add the printed bare JID
+as `DEMO_FILES_AGENT_ID` in the orchestrator's `.env`, then rebuild/restart the
+orchestrator and client. Blank/absent leaves the original maps-only toolset.
+Start files alongside maps before the orchestrator. No automatic deployment or
+portal identity creation is performed by this source change.
+
+Answers include filenames and line evidence. Search/read operations are bounded
+and do not guarantee exhaustive results; PDF and semantic search are not included.
+Document excerpts go to the LLM provider and orchestrator, so mount only data
+you intend authorized mesh callers to access. Combined “look up my address and
+find nearby gyms” queries can chain Files -> Maps -> final answer in one turn,
+within the four-remote-call budget. Both agents' source evidence is retained.
+Conversation memory still carries the final answer into subsequent turns.

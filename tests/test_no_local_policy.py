@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ROLES = ("client", "maps", "orchestrator")
+ROLES = ("client", "maps", "orchestrator", "files")
 LOCAL_POLICY = re.compile(r"--allow|\bpolicy\s*\.\s*(?:set|allow|deny)\b")
 
 

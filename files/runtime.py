@@ -48,22 +48,8 @@ def prepare_runtime() -> None:
     os.environ["CYNAPSA_STATE_DIRECTORY"] = str(STATE.resolve())
 
 
-def maps_agent_id() -> str:
-    value = _required_environment("DEMO_MAPS_AGENT_ID")
-    if "@" not in value or "/" in value:
-        raise RuntimeError("DEMO_MAPS_AGENT_ID must be a canonical bare JID")
-    return value
-
-
 def litellm_key() -> str:
     return _secure_file("litellm_api_key")
-
-
-def files_agent_id() -> str | None:
-    value = os.environ.get("DEMO_FILES_AGENT_ID", "").strip()
-    if value and ("@" not in value or "/" in value):
-        raise RuntimeError("DEMO_FILES_AGENT_ID must be a canonical bare JID")
-    return value or None
 
 
 def connection_options(*, enroll: bool, force_enroll: bool = False) -> dict[str, str | int | bool]:
@@ -72,7 +58,7 @@ def connection_options(*, enroll: bool, force_enroll: bool = False) -> dict[str,
     mesh_id = _required_environment("DEMO_MESH_ID")
     options: dict[str, str | int | bool] = {
         "mesh_id": mesh_id,
-        "profile_id": "demo-orchestrator",
+        "profile_id": "demo-files",
         "rpc_timeout_ms": 110_000,
     }
     if enroll:

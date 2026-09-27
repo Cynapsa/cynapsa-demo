@@ -49,7 +49,8 @@ def sdk_stub(monkeypatch):
     return sdk
 
 
-def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeypatch, tmp_path):
+@pytest.mark.parametrize("use_files", [False, True])
+def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeypatch, tmp_path, use_files):
     async def run():
         sdk = sdk_stub(monkeypatch)
         ready = asyncio.Event()
@@ -88,10 +89,11 @@ def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeyp
             prepare_runtime=lambda: None, STATE=tmp_path,
             connection_options=lambda **_: {}, litellm_key=lambda: "test-only-key",
             maps_agent_id=lambda: "maps@example.test",
+            files_agent_id=lambda: "files@example.test" if use_files else None,
         ))
         client = SimpleNamespace(complete=Mock(side_effect=[
             {"tool_calls": [{"id": "call-1", "function": {
-                "name": "ask_maps_agent", "arguments": '{"question":"gyms near test address"}',
+                    "name": "ask_files_agent" if use_files else "ask_maps_agent", "arguments": '{"question":"gyms near test address"}',
             }}]},
             {"content": "Here is Gym A"},
             {"content": "Remembered"},
@@ -119,8 +121,10 @@ def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeyp
             first = await session.handler(request("My test address; find a gym"))
             assert first["conversation_id"] == "chat-1"
             session.request.assert_awaited_once_with(
-                "maps@example.test", {"question": "gyms near test address"}, path="/maps", ttl_ms=100_000,
+                "files@example.test" if use_files else "maps@example.test",
+                {"question": "gyms near test address"}, path="/files" if use_files else "/maps", ttl_ms=100_000,
             )
+            assert first["files" if use_files else "maps"]["answer"] == "Gym A"
             second = await session.handler(request("What did I ask?"))
             assert second["maps"] is None
             assert "My test address" in json.dumps(client.complete.call_args.args[0])
@@ -169,6 +173,7 @@ def test_orchestrator_storage_startup_failure_never_opens_session(monkeypatch, t
         prepare_runtime=lambda: None, STATE=tmp_path,
         connection_options=lambda **_: {}, litellm_key=lambda: "test-only-key",
         maps_agent_id=lambda: "maps@example.test",
+        files_agent_id=lambda: None,
     ))
     client = SimpleNamespace(close=Mock())
     monkeypatch.setitem(sys.modules, "llm", SimpleNamespace(

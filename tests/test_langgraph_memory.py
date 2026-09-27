@@ -78,7 +78,7 @@ def test_graph_calls_remote_tool_and_composes_answer(tmp_path):
             remote.assert_awaited_once_with("gyms near Park Drive")
             assert result == {"answer": "Here is a gym.", "maps": {"answer": "Gym A", "sources": []}}
             assert client.complete.call_args.args[0][-1]["role"] == "tool"
-            assert set(agent.graph.nodes) >= {"reason", "maps_tool", "compose", "finish"}
+            assert set(agent.graph.nodes) >= {"reason", "agent_tools", "finish"}
     asyncio.run(run())
 
 

@@ -83,4 +83,3 @@ async def watch_connection_async(session, entity):
             await worker
         except asyncio.CancelledError:
             pass
-

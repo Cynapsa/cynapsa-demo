@@ -106,6 +106,13 @@ def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeyp
         load("workflow", ROOT / "orchestrator/workflow.py", monkeypatch)
         # Runtime login strips configuration whitespace; routing must agree.
         monkeypatch.setenv("DEMO_MESH_ID", " test-mesh ")
+        memory_directory = tmp_path
+        if use_files:
+            memory_directory = tmp_path / "local-memory"
+            memory_directory.mkdir(mode=0o700)
+            monkeypatch.setenv("DEMO_MEMORY_DIRECTORY", str(memory_directory))
+        else:
+            monkeypatch.delenv("DEMO_MEMORY_DIRECTORY", raising=False)
         load("connection_alerts", ROOT / "orchestrator/connection_alerts.py", monkeypatch)
         app = load("demo_orchestrator_adapter", ROOT / "orchestrator/app.py", monkeypatch)
         service = asyncio.create_task(app.serve(enroll=False))
@@ -134,7 +141,9 @@ def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeyp
                 with pytest.raises(sdk.RPCException) as failure:
                     await session.handler(bad)
                 assert failure.value.code == "bad_request"
-            assert (tmp_path / "conversations.sqlite").stat().st_mode & 0o777 == 0o600
+            assert (memory_directory / "conversations.sqlite").stat().st_mode & 0o777 == 0o600
+            if use_files:
+                assert not (tmp_path / "conversations.sqlite").exists()
 
             # A genuine in-flight graph turn must finish its checkpoint before
             # session teardown closes the saver (contexts exit right-to-left).

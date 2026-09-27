@@ -46,8 +46,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --gid 65532 cynapsa \
     && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin cynapsa \
-    && mkdir -p /app /opt/cynapsa /var/lib/cynapsa \
-    && chown -R 65532:65532 /app /var/lib/cynapsa
+    && mkdir -p /app /opt/cynapsa /var/lib/cynapsa /var/lib/cynapsa-memory \
+    && chmod 0700 /var/lib/cynapsa-memory \
+    && chown -R 65532:65532 /app /var/lib/cynapsa /var/lib/cynapsa-memory
 WORKDIR /app
 COPY requirements.txt ./
 COPY --from=sdk-builder /out/*.whl /tmp/wheels/

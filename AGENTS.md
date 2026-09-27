@@ -293,6 +293,9 @@ the orchestrator volume (`conversations.sqlite`, 0600; not encrypted). The
 model context is the last eight successful turn pairs, with remembered answer
 text capped at 4,000 characters. Failed turns do not enter successful history.
 Checkpoint disk retention is unbounded; protect this private volume.
+Cloud deployments may set `DEMO_MEMORY_DIRECTORY` to a private local filesystem
+separate from persistent credentials; chat memory then resets on replacement.
+Do not put the live SQLite WAL database on NFS/EFS.
 One process owns it and serializes turns; no distributed/shared-volume memory.
 The async native SDK dispatches handlers on the session's creating loop.
 That loop owns the shared graph and saver and must remain running until async

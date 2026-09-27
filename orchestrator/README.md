@@ -158,3 +158,12 @@ Downstream timeout is now 504 `agent_timeout`; detailed downstream errors are
 logged locally while the client receives the existing generic 502 failure.
 Rebuild/restart after application changes. File excerpts and answers may be
 retained in the orchestrator/model context; see `../files/README.md` for privacy.
+
+## Cloud filesystem separation
+
+`DEMO_MEMORY_DIRECTORY` optionally selects a private, owner-controlled (0700)
+directory for SQLite, separate from `CYNAPSA_STATE_DIRECTORY`. The Docker image
+provides `/var/lib/cynapsa-memory` for task-local memory; AWS uses this while
+credentials persist on EFS. Chat history there resets on task replacement.
+Local runs keep the default SQLite path in the existing local Docker volume.
+Do not use NFS/EFS for the live SQLite WAL database or share it between replicas.

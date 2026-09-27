@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import logging
 import os
+import stat
 import uuid
+from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -37,7 +39,14 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
     files_target = files_agent_id()
     model_client = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
     try:
-        memory_path = STATE / "conversations.sqlite"
+        # Deployments can keep installation credentials on durable storage while
+        # leaving SQLite on a local filesystem (WAL must not be shared via NFS).
+        memory_directory = Path(os.environ.get("DEMO_MEMORY_DIRECTORY", str(STATE)))
+        info = memory_directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077):
+            raise RuntimeError("memory directory must be owned by the current user with mode 0700")
+        memory_path = memory_directory / "conversations.sqlite"
         fd = os.open(memory_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             os.fchmod(fd, 0o600)

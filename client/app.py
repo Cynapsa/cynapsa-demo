@@ -61,6 +61,8 @@ def main() -> None:
                 maps = data.get("maps") or {}
                 for source in maps.get("sources", []):
                     print(f"  {source.get('name') or 'Place'}: {source['google_maps_url']}")
+                for source in (data.get("files") or {}).get("sources", []):
+                    print(f"  File: {source['path']}:{source.get('line', source.get('start_line', 1))}", flush=True)
             except (cynapsa.NativeError, cynapsa.SdkSafetyTimeout, ValueError, KeyError) as exc:
                 print(f"Request failed: {exc}", flush=True)
 

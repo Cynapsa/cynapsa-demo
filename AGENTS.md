@@ -1,6 +1,6 @@
 # Demo entity runbook for agents
 
-This file is the operational contract for running the three entities in this
+This file is the operational contract for running the four entities in this
 repository. Do not put real enrollment tokens or API keys in tracked files,
 Dockerfiles, images, commits, logs, or documentation.
 
@@ -36,9 +36,9 @@ tokens and installation state are supplied at runtime and are not part of the im
 - Git
 - Docker Desktop or a compatible Docker Engine, already running
 - A GitHub token with read access to both Cynapsa source repositories for builds
-- All three Cynapsa identities must belong to the same mesh
+- All participating Cynapsa identities must belong to the same mesh
 - An active enrollment grant with capacity for each new local installation
-- A LiteLLM gateway API key for the maps and orchestrator containers
+- An LLM API key for maps, orchestrator, and the optional files container
 - A Google Maps API key with Places API access for the maps container
 
 Enrollment grants are reusable by default, but may have a mesh scope, expiry,
@@ -258,8 +258,8 @@ an active enrollment grant with capacity for a new installation.
 
 ## Expected failure signals
 
-All three entities own one SDK `next_event()` consumer for console alerts.
-It runs in a background thread in maps/client and an async task in the
+All four entities own one SDK `next_event()` consumer for console alerts.
+It runs in a background thread in maps/files/client and an async task in the
 orchestrator, separately from handlers and user input. Do not add another
 competing `next_event()` consumer without event fan-out.
 Connectivity and SDK lifecycle transitions print an `ALERT`; canonical
@@ -285,7 +285,7 @@ revision before a GitHub-built image can show live connection transitions.
 
 ## Application and delivery bounds
 
-Both servers use independent LangGraph `StateGraph` workflows; all remote
+All three servers use independent LangGraph `StateGraph` workflows; all remote
 tools remain native Cynapsa RPCs. The client has no graph. `/ask` carries a
 client-selected `conversation_id`, isolated by authenticated sender/mesh and
 the orchestrator's canonical identity. Async SQLite checkpoints persist in
@@ -307,7 +307,12 @@ Maps uses at most three model rounds and ten tool calls per round. The first
 round must call a tool; details IDs must come from a previous search. Invalid
 tools return 502 `maps_tool_error`, unfinished answers `maps_no_answer`, Places
 failure `places_unavailable`, and model failure 503 `model_unavailable`.
-Orchestrator permits zero or one maps call plus a final completion. Its bad
+Orchestrator loops reason -> agent_tools -> reason and permits at most four
+maps/files calls per turn, including sequential execution of validated batches.
+Both tools remain available after each result; at the call limit one final
+completion disables tools. Extra calls are rejected and not sent. Both agents'
+citations are retained, and only the finalized answer enters successful memory.
+There is no automatic retry of a failed chain. Its bad
 input, timeout and model failures are 400/504/503 respectively; downstream
 native/remote failures become generic 502 `orchestrator_failed`. Its terminal
 logs include canonical downstream details and traces; keep them private.
@@ -338,3 +343,32 @@ PYTHONPATH=/path/to/cynapsa-python-sdk/src .venv/bin/python -m pytest -q
 Without the SDK installed, this dispatch test skips. Other mock-session tests
 are not a substitute. The test forces saver-lock contention, repeated turns,
 the remote-tool path, concurrent arrivals, and worker teardown.
+
+## Optional fourth identity: files
+
+Follow `files/README.md`. This directory is independently runnable and uses the
+same GitHub-backed SDK/Core build and genuine force-enroll flow. Create its
+identity in the mesh, configure `.env` with `CYNAPSA_TOKEN`, `DEMO_MESH_ID`,
+`CYNAPSA_GITHUB_TOKEN`, `LITELLM_API_KEY` and absolute `DEMO_FILES_DIRECTORY`.
+The runner mounts only that directory read-only at `/data`; the image never
+includes database content. Add its printed bare JID as `DEMO_FILES_AGENT_ID`
+in orchestrator `.env`. Start files/maps, then orchestrator, then client.
+Without that destination the orchestrator retains its original toolset.
+
+Tools are list/search/read for bounded UTF-8 `.txt/.md/.csv/.json` files; no
+symlinks, hidden files, path escape, write tools, PDF, or vector database.
+The files graph is local and exchanges native RPCs, not graph objects.
+Sources contain relative paths/lines/excerpts; no evidence forces not-found.
+Documents are untrusted data. Excerpts leave the machine for the model and
+orchestrator. All authorized mesh callers share access to this directory.
+Use only a dedicated database, not secrets or a broad home-directory mount.
+The files event observer owns one `next_event()` consumer like maps.
+The orchestrator can chain Files -> Maps -> answer in one turn within its
+four-call budget. Pass only the needed location/context to Maps, not whole
+private documents. Per-call RPC/model timeouts do not imply a total deadline;
+the existing 140-second client TTL can expire during a slow chain.
+Credential-free tests in `tests/test_files_agent.py` cover boundaries, limits,
+tool reasoning and orchestrator routing; they do not certify live networking.
+`tests/test_orchestrator_chaining.py` additionally verifies Files -> Maps,
+source retention, bounded calls, invalid-batch rejection before RPCs, and
+failed-chain memory isolation using deterministic fake model/RPC fixtures.

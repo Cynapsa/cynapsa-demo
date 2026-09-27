@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ROLES = ("client", "maps", "orchestrator")
+ROLES = ("client", "maps", "orchestrator", "files")
 
 
 class ForceEnrollTests(unittest.TestCase):
@@ -75,6 +75,7 @@ class ForceEnrollTests(unittest.TestCase):
                 env.update({
                     "PATH": f"{scratch}{os.pathsep}{env['PATH']}",
                     "DOCKER_LOG": str(log),
+                    "DEMO_FILES_DIRECTORY": scratch,
                     f"CYNAPSA_DEMO_{role.upper()}_ENV_FILE": str(demo_env),
                     f"CYNAPSA_DEMO_{role.upper()}_VOLUME": f"test-{role}-state",
                 })
@@ -94,6 +95,11 @@ class ForceEnrollTests(unittest.TestCase):
                 self.assertNotIn("DEMO_FORCE_ENROLL", runs[0])
                 self.assertIn("--env DEMO_FORCE_ENROLL=1", runs[1])
                 self.assertFalse(any(call.startswith("buildx ") for call in calls))
+                if role == "files":
+                    self.assertTrue(all(
+                        f"type=bind,src={scratch},dst=/data,readonly" in call for call in runs
+                    ))
+                    self.assertTrue(all("--env DEMO_FILES_DIRECTORY=/data" in call for call in runs))
                 self.assertNotIn("DEMO_ENROLL_ONLY", "\n".join(calls))
                 self.assertNotIn("test-only-github-token", "\n".join(calls))
 

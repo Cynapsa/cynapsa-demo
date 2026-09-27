@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from llm import ModelClient, ModelError
-from runtime import STATE, connection_options, litellm_key, maps_agent_id
+from runtime import STATE, connection_options, litellm_key, maps_agent_id, files_agent_id
 from workflow import ConversationAgent, thread_key
 from connection_alerts import watch_connection_async
 
@@ -34,6 +34,7 @@ class AskBody(BaseModel):
 
 async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
     target = maps_agent_id()
+    files_target = files_agent_id()
     model_client = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
     try:
         memory_path = STATE / "conversations.sqlite"
@@ -61,7 +62,17 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
                 except (ValueError, UnicodeError):
                     raise RuntimeError("maps agent returned an invalid response") from None
 
-            agent = ConversationAgent(model_client, ask_maps, checkpointer)
+            async def ask_files(question: str) -> dict[str, Any]:
+                remote = await session.request(
+                    files_target, {"question": question}, path="/files", ttl_ms=100_000
+                )
+                try:
+                    return remote.json()
+                except (ValueError, UnicodeError):
+                    raise RuntimeError("files agent returned an invalid response") from None
+
+            agent = ConversationAgent(model_client, ask_maps, checkpointer,
+                                      ask_files=ask_files if files_target else None)
 
             @session.on("/ask")
             async def ask(request: cynapsa.CynapsaRequest) -> dict[str, Any]:
@@ -83,9 +94,9 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
                     answer = await agent.answer(body.prompt.strip(), key)
                     return {**answer, "conversation_id": conversation_id}
                 except (TimeoutError, cynapsa.SdkSafetyTimeout) as exc:
-                    LOG.warning("Maps RPC timed out: %r", exc, exc_info=True)
+                    LOG.warning("Downstream RPC timed out: %r", exc, exc_info=True)
                     raise cynapsa.RPCException(
-                        504, code="maps_timeout", detail="The maps agent timed out"
+                        504, code="agent_timeout", detail="The downstream agent timed out"
                     ) from None
                 except ModelError as exc:
                     LOG.warning(
@@ -97,7 +108,7 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
                     ) from None
                 except cynapsa.RemoteNativeError as exc:
                     LOG.warning(
-                        "Maps RPC returned %r; canonical response status=%s error=%r",
+                        "Downstream RPC returned %r; canonical response status=%s error=%r",
                         exc, exc.response.status_code, exc.response.error,
                         exc_info=True,
                     )
@@ -105,7 +116,7 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
                         502, code="orchestrator_failed", detail="The demo could not answer"
                     ) from None
                 except cynapsa.NativeError as exc:
-                    LOG.warning("Maps RPC failed: %r", exc, exc_info=True)
+                    LOG.warning("Downstream RPC failed: %r", exc, exc_info=True)
                     raise cynapsa.RPCException(
                         502, code="orchestrator_failed", detail="The demo could not answer"
                     ) from None

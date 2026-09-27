@@ -1,0 +1,80 @@
+{
+  "family": "demo-maps",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::821211778460:role/CynapsaDemoMapsExecutionRole",
+  "taskRoleArn": "arn:aws:iam::821211778460:role/CynapsaDemoMapsTaskRole",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "cynapsa-state",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-02bb63c19f7412232",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-0feea5bdb47dfe0a2",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "demo-maps",
+      "image": "821211778460.dkr.ecr.us-east-1.amazonaws.com/cynapsa-demo-maps@sha256:ce1370bad71744e711c7d5035c60bd1005d5802017ceff750ff6fddcd6b7e8d0",
+      "essential": true,
+      "user": "65532:65532",
+      "stopTimeout": 120,
+      "environment": [
+        {
+          "name": "DEMO_MESH_ID",
+          "value": "cynapsa_demo_cynapsa_demo"
+        },
+        {
+          "name": "LITELLM_BASE_URL",
+          "value": "https://litellm.eladrave.com"
+        },
+        {
+          "name": "LITELLM_MODEL",
+          "value": "gpt-5.6-terra-high"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "CYNAPSA_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:821211778460:secret:cynapsa-demo-maps-runtime-QZMgXn:enrollment_token::"
+        },
+        {
+          "name": "GOOGLE_MAPS_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:821211778460:secret:cynapsa-demo-maps-runtime-QZMgXn:google_maps_api_key::"
+        },
+        {
+          "name": "LITELLM_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:821211778460:secret:cynapsa-demo-maps-runtime-QZMgXn:litellm_api_key::"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "cynapsa-state",
+          "containerPath": "/var/lib/cynapsa",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/cynapsa-demo-maps",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "maps"
+        }
+      }
+    }
+  ]
+}

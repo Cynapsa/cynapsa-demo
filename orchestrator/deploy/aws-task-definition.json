@@ -1,0 +1,88 @@
+{
+  "family": "demo-orchestrator",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::821211778460:role/CynapsaDemoOrchestratorExecutionRole",
+  "taskRoleArn": "arn:aws:iam::821211778460:role/CynapsaDemoOrchestratorTaskRole",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "cynapsa-state",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-02bb63c19f7412232",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-030cbcbd58b476d6d",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "demo-orchestrator",
+      "image": "821211778460.dkr.ecr.us-east-1.amazonaws.com/cynapsa-demo-orchestrator@sha256:348e0f6dd1b32feab4ede17155a646f873fb4fb46a129afefbb366039eb38975",
+      "essential": true,
+      "user": "65532:65532",
+      "stopTimeout": 120,
+      "environment": [
+        {
+          "name": "DEMO_MESH_ID",
+          "value": "cynapsa_demo_cynapsa_demo"
+        },
+        {
+          "name": "DEMO_MAPS_AGENT_ID",
+          "value": "cynapsa-demo.agent-07298f24-b4d5-481b-bcbd-7dfd921b6cec@connect.cynapsa.com"
+        },
+        {
+          "name": "DEMO_FILES_AGENT_ID",
+          "value": "cynapsa-demo.agent-bdf850af-e1a6-4d2c-a478-99b93693aa05@connect.cynapsa.com"
+        },
+        {
+          "name": "DEMO_MEMORY_DIRECTORY",
+          "value": "/var/lib/cynapsa-memory"
+        },
+        {
+          "name": "LITELLM_BASE_URL",
+          "value": "https://litellm.eladrave.com"
+        },
+        {
+          "name": "LITELLM_MODEL",
+          "value": "gpt-5.6-terra-high"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "CYNAPSA_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:821211778460:secret:cynapsa-demo-orchestrator-runtime-XWQDWs:enrollment_token::"
+        },
+        {
+          "name": "LITELLM_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:821211778460:secret:cynapsa-demo-orchestrator-runtime-XWQDWs:litellm_api_key::"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "cynapsa-state",
+          "containerPath": "/var/lib/cynapsa",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/cynapsa-demo-orchestrator",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "orchestrator"
+        }
+      }
+    }
+  ]
+}

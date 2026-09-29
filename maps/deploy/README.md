@@ -25,9 +25,11 @@ Profiles are not on a persistent volume. Replacement can require another
 enrollment, so keep the grant valid and with available installation capacity.
 Do not claim durable profile renewal or HA. One replica only.
 
-Old AWS `demo-maps` desired/running/pending count is zero. Rollback resources
-are preserved (`aws-historical.md`, `aws-task-definition.json`). GCP orchestrator
-remains at zero; three unrelated legacy GCP pools are untouched. Runtime compute,
+AWS `demo-maps` was scaled to zero on 2026-09-27; on 2026-09-29, ECS reports
+that service as `MISSING`. Historical configuration files remain in this repo
+(`aws-historical.md`, `aws-task-definition.json`), but a live AWS Maps service is
+not available for immediate rollback. The old GCP orchestrator was left at zero;
+three unrelated legacy GCP pools were untouched. Runtime compute,
 logs, secrets and retained images continue to incur applicable charges.
 
 ## Operations

@@ -1,4 +1,4 @@
-"""Application-level Cynapsa traffic logs; never inspect payloads or headers.
+"""Simple application-level Cynapsa request and response logs.
 
 Kept in each entity directory so it can be copied and built independently.
 These are observations, not transport delivery receipts or SDK event consumers.
@@ -10,8 +10,7 @@ import functools
 import inspect
 import json
 import logging
-import time
-import uuid
+import os
 from contextlib import contextmanager
 
 
@@ -25,45 +24,50 @@ def configure_logging() -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def _text(value):
-    return value[:256] if isinstance(value, str) else None
+def _peer(identity):
+    for name in ("client", "orchestrator", "maps", "files"):
+        if identity and identity == os.environ.get(f"DEMO_{name.upper()}_AGENT_ID"):
+            return f"{name} ({identity})"
+    return identity or "unknown"
 
 
-def _status(value):
-    status = getattr(value, "status_code", None)
-    return status if type(status) is int else None
-
-
-def _emit(event, fields, **extra):
-    LOG.info("CYNAPSA %s", json.dumps({"event": event, **fields, **extra}, ensure_ascii=True))
+def _content(value):
+    body = getattr(value, "body", value)
+    if isinstance(body, bytes):
+        decoded = body.decode("utf-8", errors="replace")
+        try:
+            body = json.loads(decoded)
+        except ValueError:
+            body = decoded
+    return json.dumps(body, ensure_ascii=False, default=str)
 
 
 @contextmanager
-def _traffic(role, *, incoming, peer, path, message_id=None, mode="rpc"):
-    fields = {
-        "entity": role, "log_id": uuid.uuid4().hex,
-        "peer": _text(peer), "path": _text(path), "mode": _text(mode),
-        "message_id": _text(message_id),
-    }
-    start = time.monotonic()
-    _emit("request.received" if incoming else "request.started", fields)
+def _traffic(role, *, incoming, peer, path, content, mode="rpc"):
+    source = role.removeprefix("demo-")
+    target = _peer(peer)
+    direction = "from" if incoming else "to"
+    LOG.info("[%s] request %s %s %s %s: %s",
+             source, "received" if incoming else "sent",
+             direction, target, path or "/", _content(content))
     outcome = {}
     try:
         yield outcome
     except BaseException as exc:
-        response = getattr(exc, "response", None)
-        _emit("handler.failed" if incoming else "request.failed", fields,
-              elapsed_ms=round((time.monotonic() - start) * 1000),
-              error_type=type(exc).__name__, code=_text(getattr(exc, "code", None)),
-              status=_status(response) or _status(exc))
+        LOG.info("[%s] request failed %s %s %s: %s: %s",
+                 source, direction, target, path or "/",
+                 type(exc).__name__, exc)
         raise
     else:
         value = outcome.get("value")
-        # Normalization/transmission follow this return. Invalid values can
-        # still become SDK errors; do not infer canonical status or wire ACK.
-        event = ("handler.completed" if mode == "msg" else "handler.returned") if incoming else "response.received"
-        _emit(event, fields, elapsed_ms=round((time.monotonic() - start) * 1000),
-              status=None if incoming and mode == "msg" else _status(value))
+        if incoming:
+            if mode != "msg":
+                # The SDK still needs to validate and transmit this return value.
+                LOG.info("[%s] response returned to %s %s: %s",
+                         source, target, path or "/", _content(value))
+        else:
+            LOG.info("[%s] response received from %s %s: %s",
+                     source, target, path or "/", _content(value))
 
 
 def log_handler(role):
@@ -73,7 +77,7 @@ def log_handler(role):
             return _traffic(role, incoming=True,
                             peer=getattr(request, "from_agent_id", None),
                             path=getattr(request, "path", None),
-                            message_id=getattr(request, "message_id", None),
+                            content=getattr(request, "body", None),
                             mode=getattr(request, "mode", None) or "rpc")
 
         if inspect.iscoroutinefunction(handler):
@@ -94,12 +98,14 @@ def log_handler(role):
 
 
 def request_sync(session, role, target, payload, **options):
-    with _traffic(role, incoming=False, peer=target, path=options.get("path")) as outcome:
+    with _traffic(role, incoming=False, peer=target, path=options.get("path"),
+                  content=payload) as outcome:
         outcome["value"] = session.request(target, payload, **options)
         return outcome["value"]
 
 
 async def request_async(session, role, target, payload, **options):
-    with _traffic(role, incoming=False, peer=target, path=options.get("path")) as outcome:
+    with _traffic(role, incoming=False, peer=target, path=options.get("path"),
+                  content=payload) as outcome:
         outcome["value"] = await session.request(target, payload, **options)
         return outcome["value"]

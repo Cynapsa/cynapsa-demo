@@ -131,13 +131,13 @@ def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeyp
                 )
 
             first = await session.handler(request("My test address; find a gym"))
-            traffic = [json.loads(record.getMessage().removeprefix("CYNAPSA "))
-                       for record in caplog.records if record.name == "demo.cynapsa"]
-            assert [item["event"] for item in traffic] == [
-                "request.received", "request.started", "response.received", "handler.returned",
-            ]
-            assert traffic[0]["path"] == "/ask"
-            assert traffic[1]["path"] == ("/files" if use_files else "/maps")
+            traffic = [record.getMessage() for record in caplog.records
+                       if record.name == "demo.cynapsa"]
+            assert "request received from client-a@example.test /ask" in traffic[0]
+            assert f"{'files' if use_files else 'maps'}@example.test" in traffic[1]
+            assert ("/files" if use_files else "/maps") in traffic[1]
+            assert "response received from" in traffic[2]
+            assert "response returned to" in traffic[3]
             assert first["conversation_id"] == "chat-1"
             session.request.assert_awaited_once_with(
                 "files@example.test" if use_files else "maps@example.test",
@@ -263,7 +263,7 @@ def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys, capl
     assert ("Conversation: resumed-chat" in output) is not quiet
     assert ("demo-client ready as" in output) is not quiet
     assert "ok" in output
-    assert ("CYNAPSA" in caplog.text) is not quiet
+    assert ("request sent to" in caplog.text) is not quiet
 
 
 def test_quiet_client_keeps_prompts_answers_and_failures(monkeypatch, capsys, caplog):

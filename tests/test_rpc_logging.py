@@ -1,9 +1,8 @@
-"""No-network checks for standalone entities' traffic logs and HTTP quieting."""
+"""No-network checks for simple Cynapsa traffic logs and HTTP quieting."""
 
 import asyncio
 import importlib.util
 import inspect
-import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,36 +23,35 @@ def helper(entity):
     return module
 
 
-def events(caplog):
-    return [json.loads(record.getMessage().removeprefix("CYNAPSA "))
-            for record in caplog.records if record.name == "demo.cynapsa"]
+def lines(caplog):
+    return [record.getMessage() for record in caplog.records if record.name == "demo.cynapsa"]
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
-def test_outbound_preserves_call_and_result_without_payloads(entity, caplog):
+def test_outbound_logs_names_ids_and_full_request_and_response(entity, caplog, monkeypatch):
     logs = helper(entity)
-    payload = {"prompt": "private-prompt-sentinel"}
-    result = SimpleNamespace(status_code=200, body=b"private-response-sentinel")
+    target = "maps@example.test"
+    monkeypatch.setenv("DEMO_MAPS_AGENT_ID", target)
+    payload = {"prompt": "A very long prompt " + "x" * 5000}
+    result = SimpleNamespace(status_code=200, body=b'{"answer":"Gym A"}')
     session = SimpleNamespace(request=Mock(return_value=result))
     with caplog.at_level(logging.INFO):
-        assert logs.request_sync(session, entity, "peer@example.test", payload, path="/ask", ttl_ms=123) is result
-    session.request.assert_called_once_with("peer@example.test", payload, path="/ask", ttl_ms=123)
-    sent, received = events(caplog)
-    assert sent["event"] == "request.started"
-    assert received["event"] == "response.received"
-    assert sent["log_id"] == received["log_id"]
-    assert sent["peer"] == "peer@example.test" and sent["path"] == "/ask"
-    assert received["status"] == 200 and received["elapsed_ms"] >= 0
-    assert "private-" not in caplog.text
+        assert logs.request_sync(session, entity, target, payload, path="/ask", ttl_ms=123) is result
+    session.request.assert_called_once_with(target, payload, path="/ask", ttl_ms=123)
+    sent, received = lines(caplog)
+    assert sent.startswith(f"[{entity}] request sent to maps ({target}) /ask: ")
+    assert payload["prompt"] in sent
+    assert received == f'[{entity}] response received from maps ({target}) /ask: {{"answer": "Gym A"}}'
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
-def test_inbound_async_dispatch_metadata_and_result(entity, caplog):
+def test_inbound_async_logs_body_and_handler_return(entity, caplog, monkeypatch):
     logs = helper(entity)
-    request = SimpleNamespace(from_agent_id="sender@example.test", path="/maps",
-                              message_id="message-1", mode="rpc",
-                              body=b"private-body", headers=(("Authorization", "private-token"),))
-    result = {"answer": "private-result"}
+    sender = "client@example.test"
+    monkeypatch.setenv("DEMO_CLIENT_AGENT_ID", sender)
+    request = SimpleNamespace(from_agent_id=sender, path="/maps", mode="rpc",
+                              body=b'{"question":"private prompt"}')
+    result = {"answer": "private result"}
 
     @logs.log_handler(entity)
     async def receive(incoming):
@@ -63,20 +61,16 @@ def test_inbound_async_dispatch_metadata_and_result(entity, caplog):
     assert inspect.iscoroutinefunction(receive)
     with caplog.at_level(logging.INFO):
         assert asyncio.run(receive(request)) is result
-    arrived, prepared = events(caplog)
-    assert arrived["event"] == "request.received"
-    assert arrived["message_id"] == "message-1"
-    assert prepared["event"] == "handler.returned" and prepared["status"] is None
-    assert "private-" not in caplog.text
+    arrived, returned = lines(caplog)
+    assert arrived == f'[{entity}] request received from client ({sender}) /maps: {{"question": "private prompt"}}'
+    assert returned == f'[{entity}] response returned to client ({sender}) /maps: {{"answer": "private result"}}'
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_failed_request_is_logged_and_original_error_propagates(entity, asynchronous, caplog):
+def test_failed_request_logs_error_and_preserves_exception(entity, asynchronous, caplog):
     logs = helper(entity)
-    failure = RuntimeError("private-error-body")
-    failure.code = "forbidden"
-    failure.response = SimpleNamespace(status_code=403)
+    failure = RuntimeError("remote refused")
     session = SimpleNamespace(request=(AsyncMock if asynchronous else Mock)(side_effect=failure))
     with caplog.at_level(logging.INFO), pytest.raises(RuntimeError) as caught:
         if asynchronous:
@@ -84,29 +78,25 @@ def test_failed_request_is_logged_and_original_error_propagates(entity, asynchro
         else:
             logs.request_sync(session, entity, "peer@example.test", {}, path="/maps")
     assert caught.value is failure
-    assert [e["event"] for e in events(caplog)] == ["request.started", "request.failed"]
-    assert events(caplog)[-1]["code"] == "forbidden"
-    assert events(caplog)[-1]["status"] == 403
-    assert "private-error-body" not in caplog.text
+    assert lines(caplog) == [
+        f"[{entity}] request sent to peer@example.test /maps: {{}}",
+        f"[{entity}] request failed to peer@example.test /maps: RuntimeError: remote refused",
+    ]
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
 def test_handler_error_and_cancellation_are_not_swallowed(entity, caplog):
     logs = helper(entity)
-    failure = RuntimeError("private-detail")
-    failure.status_code = 404
-    failure.code = "not_found"
+    failure = RuntimeError("handler failed")
 
     @logs.log_handler(entity)
     def receive(_):
         raise failure
 
     with caplog.at_level(logging.INFO), pytest.raises(RuntimeError) as caught:
-        receive(SimpleNamespace(mode="rpc"))
+        receive(SimpleNamespace(mode="rpc", body=b"hello"))
     assert caught.value is failure
-    assert events(caplog)[-1]["event"] == "handler.failed"
-    assert events(caplog)[-1]["status"] == 404
-    assert "private-detail" not in caplog.text
+    assert lines(caplog)[-1] == f"[{entity}] request failed from unknown /: RuntimeError: handler failed"
 
     @logs.log_handler(entity)
     async def cancelled(_):
@@ -115,11 +105,11 @@ def test_handler_error_and_cancellation_are_not_swallowed(entity, caplog):
     caplog.clear()
     with caplog.at_level(logging.INFO), pytest.raises(asyncio.CancelledError):
         asyncio.run(cancelled(SimpleNamespace()))
-    assert events(caplog)[-1]["error_type"] == "CancelledError"
+    assert "CancelledError" in lines(caplog)[-1]
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
-def test_msg_handler_never_claims_a_reply_and_metadata_is_single_line(entity, caplog):
+def test_msg_logs_only_request_and_unknown_peer_keeps_id(entity, caplog):
     logs = helper(entity)
 
     @logs.log_handler(entity)
@@ -127,30 +117,26 @@ def test_msg_handler_never_claims_a_reply_and_metadata_is_single_line(entity, ca
         return None
 
     with caplog.at_level(logging.INFO):
-        receive(SimpleNamespace(mode="msg", path="/files\nforged-log", from_agent_id="x" * 300))
-    assert events(caplog)[-1]["event"] == "handler.completed"
-    assert events(caplog)[-1]["status"] is None
-    assert len(events(caplog)[0]["peer"]) == 256
-    assert all("\n" not in record.getMessage() for record in caplog.records)
+        receive(SimpleNamespace(mode="msg", path="/files", from_agent_id="other@example.test",
+                                body=b"plain text"))
+    assert lines(caplog) == [f'[{entity}] request received from other@example.test /files: "plain text"']
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
-def test_real_httpx_access_logs_quiet_but_warnings_and_rpc_visible(entity, caplog, monkeypatch):
+def test_http_access_logs_quiet_but_warnings_and_cynapsa_visible(entity, caplog, monkeypatch):
     logs = helper(entity)
     with caplog.at_level(logging.INFO):
         for name in ("httpx", "httpcore", "urllib3", "requests"):
             monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
         logs.configure_logging()
-        # Actual httpx request logging uses these paths, no network or keys.
         with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
             client.post("https://model.example.test/v1/chat/completions", json={"prompt": "private"})
-            client.post("https://places.example.test/search", json={"query": "private"})
-        logging.getLogger("httpx").warning("safe warning retained")
-        logs.request_sync(SimpleNamespace(request=lambda *_, **__: SimpleNamespace(status_code=200)),
-                          entity, "peer@example.test", {}, path="/ask")
+        logging.getLogger("httpx").warning("warning retained")
+        logs.request_sync(SimpleNamespace(request=lambda *_, **__: SimpleNamespace(body=b"ok")),
+                          entity, "peer@example.test", {"question": "hello"}, path="/ask")
     assert "HTTP Request:" not in caplog.text
-    assert "safe warning retained" in caplog.text
-    assert "request.started" in caplog.text
+    assert "warning retained" in caplog.text
+    assert "request sent to" in caplog.text
 
 
 def test_helpers_stay_identical_and_are_packaged_in_each_directory():
@@ -161,11 +147,10 @@ def test_helpers_stay_identical_and_are_packaged_in_each_directory():
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
-@pytest.mark.parametrize("invalid", ["oversized", "unserializable"])
-def test_return_log_never_promises_success_before_sdk_normalization(entity, invalid, caplog):
+def test_return_log_does_not_claim_sdk_delivery(entity, caplog):
     sdk = pytest.importorskip("cynapsa")
     logs = helper(entity)
-    value = {"answer": "x" * 300_000} if invalid == "oversized" else {"answer": object()}
+    value = {"answer": object()}
 
     @logs.log_handler(entity)
     def receive(_):
@@ -174,18 +159,17 @@ def test_return_log_never_promises_success_before_sdk_normalization(entity, inva
     with caplog.at_level(logging.INFO):
         returned = receive(SimpleNamespace(mode="rpc"))
     assert returned is value
-    assert events(caplog)[-1]["event"] == "handler.returned"
-    assert events(caplog)[-1]["status"] is None
+    assert "response returned to" in lines(caplog)[-1]
+    assert "response sent" not in caplog.text
     with pytest.raises((TypeError, ValueError)):
         sdk.CynapsaResponse.from_value(returned)
-    assert "response.prepared" not in caplog.text
 
 
 @pytest.mark.parametrize("entity", ENTITIES)
-def test_real_sdk_errors_keep_canonical_status_and_original_exception(entity, caplog):
+def test_real_sdk_error_preserves_original_exception(entity, caplog):
     sdk = pytest.importorskip("cynapsa")
     logs = helper(entity)
-    failure = sdk.RPCException(404, code="not_found", detail="private-error-detail")
+    failure = sdk.RPCException(404, code="not_found", detail="missing endpoint")
 
     @logs.log_handler(entity)
     def receive(_):
@@ -194,24 +178,11 @@ def test_real_sdk_errors_keep_canonical_status_and_original_exception(entity, ca
     with caplog.at_level(logging.INFO), pytest.raises(sdk.RPCException) as caught:
         receive(SimpleNamespace(mode="rpc"))
     assert caught.value is failure
-    assert events(caplog)[-1]["status"] == 404
-    caplog.clear()
+    assert "request failed" in lines(caplog)[-1]
     response = sdk.CynapsaResponse.from_rpc_exception(failure)
     remote = sdk.RemoteNativeError(0, response)
     session = SimpleNamespace(request=Mock(side_effect=remote))
     with caplog.at_level(logging.INFO), pytest.raises(sdk.RemoteNativeError) as caught:
         logs.request_sync(session, entity, "peer@example.test", {}, path="/ask")
     assert caught.value is remote
-    assert events(caplog)[-1]["status"] == 404
-    assert events(caplog)[-1]["code"] == "not_found"
-    assert "private-error-detail" not in caplog.text
-
-
-@pytest.mark.parametrize("entity", ENTITIES)
-def test_closed_session_failure_is_attempt_not_sent(entity, caplog):
-    logs = helper(entity)
-    session = SimpleNamespace(request=Mock(side_effect=RuntimeError("session closed")))
-    with caplog.at_level(logging.INFO), pytest.raises(RuntimeError):
-        logs.request_sync(session, entity, "peer@example.test", {}, path="/ask")
-    assert [e["event"] for e in events(caplog)] == ["request.started", "request.failed"]
-    assert "request.sent" not in caplog.text and "response.received" not in caplog.text
+    assert "request failed" in lines(caplog)[-1]

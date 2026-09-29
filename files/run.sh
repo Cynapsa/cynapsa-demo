@@ -77,7 +77,7 @@ docker_args+=(--env GEMINI_API_KEY= --env DEMO_GEMINI_API_KEY= --env DEMO_GEMINI
 if [[ -f "$ROOT/.private/litellm_api_key" ]]; then
   docker_args+=(--mount "type=bind,src=$ROOT/.private/litellm_api_key,dst=/run/secrets/litellm_api_key,readonly")
 fi
-for variable in CYNAPSA_TOKEN LITELLM_API_KEY LITELLM_BASE_URL LITELLM_MODEL DEMO_MESH_ID; do
+for variable in CYNAPSA_TOKEN LITELLM_API_KEY LITELLM_BASE_URL LITELLM_MODEL DEMO_MESH_ID DEMO_ORCHESTRATOR_AGENT_ID; do
 	# Values in .env are authoritative; use the shell only for missing keys.
 	if [[ -f "$ENV_FILE" ]] && grep -q "^${variable}=" "$ENV_FILE"; then
 		continue

@@ -1,18 +1,25 @@
 # Cynapsa Demo
 
-All four entities log Cynapsa RPC traffic at INFO under `demo.cynapsa`:
-`request.started`, `request.received`, `response.received`, `handler.returned`,
-and failures. Logs contain entity, peer, endpoint, a local log ID, elapsed time
-and status/error category. Inbound records include the SDK message ID. No
-prompt, response body, file content, headers or credentials are added to these
-traffic logs. Metadata is bounded and JSON-escaped; protect logs containing
-identities. The local log ID pairs records within one call, not across agents.
-`request.started` means submission started, not confirmed delivery;
-`handler.returned` precedes SDK response validation/transmission and does not
-imply a successful reply. Ordinary dict/None returns have no logged status;
-explicit response objects report their declared status, not validation success.
-MSG handlers log completion instead of claiming a reply. These wrappers do not
-add an SDK event consumer or alter request arguments, results or exceptions.
+All four entities log simple Cynapsa traffic lines at INFO under `demo.cynapsa`:
+
+```text
+[client] request sent to orchestrator (agent-id@connect.cynapsa.com) /ask: {"prompt": "Find a cafe"}
+[orchestrator] request received from client (agent-id@connect.cynapsa.com) /ask: {"prompt": "Find a cafe"}
+[orchestrator] response returned to client (agent-id@connect.cynapsa.com) /ask: {"answer": "..."}
+```
+
+The log shows the full request and response content without redaction or
+truncation. Do not use private prompts, credentials or sensitive files in this
+demo if cloud log storage is not appropriate. Headers are not logged. Friendly
+peer names require an exact bare-ID match against `DEMO_CLIENT_AGENT_ID`,
+`DEMO_ORCHESTRATOR_AGENT_ID`, `DEMO_MAPS_AGENT_ID`, or `DEMO_FILES_AGENT_ID` in
+that entity's environment; otherwise only the full ID appears. Outbound
+destinations already have those variables. For incoming names, optionally set
+`DEMO_CLIENT_AGENT_ID` on the orchestrator and
+`DEMO_ORCHESTRATOR_AGENT_ID` on maps/files. `request sent` marks a call to the
+SDK, not confirmed delivery. `response returned` is logged before SDK
+validation/transmission. MSG handlers log only the incoming request. These
+wrappers do not change request arguments, results or exceptions.
 
 External HTTP access logs (`httpx`, `httpcore`, `urllib3`, `requests`) are reduced
 to WARNING, so successful model/Places calls no longer print `HTTP Request:`.

@@ -283,12 +283,16 @@ Each directory owns its identical `rpc_logging.py` helper and packages it in
 its image. Main configures external HTTP libraries at WARNING, retaining error
 diagnostics. Native outgoing calls use `request_sync`/`request_async`; handlers
 apply `@log_handler` underneath `@session.on`, preserving async classification.
-Traffic INFO records are metadata-only (no bodies/headers), bounded and escaped.
-`request.started` observes submission, not delivery. `handler.returned` precedes
-SDK validation/transmission; ordinary values have unknown status, explicit
-response objects have their declared status. MSG logs only handler completion. Failures
-re-raise the original exception. Local log IDs pair one call's records and
-inbound records include the SDK message ID; they are not cross-agent trace IDs.
+Traffic INFO records are simple request/response lines with full message
+content (no redaction or truncation); headers are not logged. Keep sensitive
+data out of demo requests because cloud logs retain it. Friendly peer names
+are resolved only by exact bare-ID matches against the `DEMO_*_AGENT_ID`
+environment variables; unknown peers show their full ID. Set
+`DEMO_CLIENT_AGENT_ID` on the orchestrator and
+`DEMO_ORCHESTRATOR_AGENT_ID` on maps/files to label inbound peers. `request
+sent` means SDK submission, not delivery; `response returned` precedes SDK
+validation/transmission. MSG logs only the incoming request. Failures re-raise
+the original exception.
 No additional `next_event()` consumer is created. The helpers must stay identical
 while every directory stays independently runnable. Rebuild and redeploy to
 change cloud logging; source edits never modify an existing container.

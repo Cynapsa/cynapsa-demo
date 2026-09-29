@@ -46,6 +46,10 @@
           "value": "cynapsa-demo.agent-bdf850af-e1a6-4d2c-a478-99b93693aa05@connect.cynapsa.com"
         },
         {
+          "name": "DEMO_CLIENT_AGENT_ID",
+          "value": "cynapsa-demo.agent-cd5d5536-e99f-4f01-b2cf-de76714b9131@connect.cynapsa.com"
+        },
+        {
           "name": "DEMO_MEMORY_DIRECTORY",
           "value": "/var/lib/cynapsa-memory"
         },

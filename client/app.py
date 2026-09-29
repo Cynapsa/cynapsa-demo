@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import re
 import uuid
@@ -13,22 +14,28 @@ import cynapsa
 
 from runtime import connection_options, orchestrator_agent_id
 from connection_alerts import watch_connection
+from rpc_logging import configure_logging, request_sync
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Cynapsa demo client")
     parser.add_argument("--enroll", action="store_true")
     parser.add_argument("--force-enroll", action="store_true")
+    parser.add_argument("--quiet", action="store_true", help="Hide logs, alerts and startup messages; keep chat output")
     parser.add_argument("--conversation-id", default=os.environ.get("DEMO_CONVERSATION_ID"))
     args = parser.parse_args()
+    configure_logging()
+    if args.quiet:
+        logging.disable(logging.CRITICAL)
     conversation_id = args.conversation_id or uuid.uuid4().hex
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", conversation_id):
         parser.error("conversation ID must contain 1–64 letters, numbers, underscores or hyphens")
     target = orchestrator_agent_id()
 
-    with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session, watch_connection(session, "demo-client"):
-        print(f"demo-client ready as {session.agent_id}", flush=True)
-        print(f"Conversation: {conversation_id} (type 'new' for a fresh chat)", flush=True)
+    with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session, watch_connection(session, "demo-client", quiet=args.quiet):
+        if not args.quiet:
+            print(f"demo-client ready as {session.agent_id}", flush=True)
+            print(f"Conversation: {conversation_id} (type 'new' for a fresh chat)", flush=True)
         while True:
             try:
                 prompt = input('Ask a question (or "quit"): ').strip()
@@ -44,7 +51,8 @@ def main() -> None:
             if not prompt:
                 continue
             try:
-                response = session.request(
+                response = request_sync(
+                    session, "demo-client",
                     target,
                     {"prompt": prompt, "conversation_id": conversation_id},
                     path="/ask",

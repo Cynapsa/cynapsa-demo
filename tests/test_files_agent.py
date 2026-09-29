@@ -196,6 +196,7 @@ def test_files_native_handler_returns_answer_and_canonical_errors(monkeypatch, t
     monkeypatch.setitem(sys.modules, "workflow", workflow)
     monkeypatch.setenv("DEMO_FILES_DIRECTORY", str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["app.py"])
+    monkeypatch.setitem(sys.modules, "rpc_logging", load("demo_files_logging", "files/rpc_logging.py"))
     app = load("demo_files_native_app", "files/app.py")
     monkeypatch.setattr(app, "threading", SimpleNamespace(Event=lambda: SimpleNamespace(wait=lambda: None)))
     app.main()

@@ -87,3 +87,12 @@ authority: expired credentials and server revocation can reject it.
 Exact pending-session replay is best effort; there is no offline mailbox.
 See [source dependencies](SOURCE_DEPENDENCIES.md): remote SDK/Core builds do
 not include unpushed local changes by assumption.
+
+## Traffic logs
+
+The app logs `CYNAPSA` request arrival, handler return and failures
+with peer, endpoint, message ID, timing and outcome—not request/response bodies
+or credentials. LLM/Places HTTP access logs are quiet; warnings/errors and
+connection alerts remain. A handler return precedes SDK validation/transmission
+and is not a successful delivery receipt.
+Rebuild with `./run.sh --build`; cloud images need redeployment.

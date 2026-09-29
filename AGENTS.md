@@ -189,6 +189,15 @@ client. After successful enrollment, remove `CYNAPSA_TOKEN` from `.env`.
 
 Default state volume: `cynapsa-demo-client-state`.
 
+Client-only `./run.sh --quiet` hides Python diagnostic logs, connection alerts
+and startup banners; input, answers/citations, request failures and explicit
+`new` conversation IDs remain. `python app.py --quiet` is the native equivalent.
+The runner forwards this through the entrypoint for cached, fresh and forced
+enrollment. The observer still drains SDK events without printing; no extra
+consumer is added. Successful build progress is captured privately and removed,
+while failed builds are reported and stop startup. Existing images must first
+be rebuilt with `./run.sh --build --quiet`. Normal server logs are unaffected.
+
 ## Later runs and image rebuilds
 
 Each `SOURCE_DEPENDENCIES.md` explains remote provenance, BuildKit secret
@@ -270,6 +279,19 @@ Observers stop before intentional session teardown; disconnects do not
 automatically terminate these application processes.
 Alerts are best-effort observations on bounded SDK queues, not a durable
 audit log or an authorization/keepalive mechanism.
+Each directory owns its identical `rpc_logging.py` helper and packages it in
+its image. Main configures external HTTP libraries at WARNING, retaining error
+diagnostics. Native outgoing calls use `request_sync`/`request_async`; handlers
+apply `@log_handler` underneath `@session.on`, preserving async classification.
+Traffic INFO records are metadata-only (no bodies/headers), bounded and escaped.
+`request.started` observes submission, not delivery. `handler.returned` precedes
+SDK validation/transmission; ordinary values have unknown status, explicit
+response objects have their declared status. MSG logs only handler completion. Failures
+re-raise the original exception. Local log IDs pair one call's records and
+inbound records include the SDK message ID; they are not cross-agent trace IDs.
+No additional `next_event()` consumer is created. The helpers must stay identical
+while every directory stays independently runnable. Rebuild and redeploy to
+change cloud logging; source edits never modify an existing container.
 The Core connectivity-event producer must be included in the fetched Core
 revision before a GitHub-built image can show live connection transitions.
 

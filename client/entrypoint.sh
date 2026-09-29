@@ -4,6 +4,10 @@ set -eu
 state_directory=${CYNAPSA_STATE_DIRECTORY:-/var/lib/cynapsa}
 private_directory=${DEMO_PRIVATE_DIRECTORY:-/tmp/cynapsa-private}
 secret_source=${DEMO_SECRET_SOURCE_DIRECTORY:-/run/secrets}
+set --
+if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
+  set -- --quiet
+fi
 
 mkdir -p "$state_directory" "$private_directory"
 chmod 700 "$state_directory" "$private_directory"
@@ -32,10 +36,10 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
       --token-file "$private_directory/enrollment_token" --force-enroll \
       -- python /app/bootstrap.py
     rm -f "$private_directory/enrollment_token"
-    exec python /app/app.py
+    exec python /app/app.py "$@"
   fi
-  exec python /app/app.py --enroll
+  exec python /app/app.py --enroll "$@"
 fi
 
 unset CYNAPSA_TOKEN
-exec python /app/app.py
+exec python /app/app.py "$@"

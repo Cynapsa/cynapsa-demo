@@ -96,3 +96,11 @@ Default volume: `cynapsa-demo-files-state`; override with
 `CYNAPSA_DEMO_FILES_VOLUME`. Other overrides: `CYNAPSA_DEMO_FILES_IMAGE` and
 `CYNAPSA_DEMO_FILES_ENV_FILE`. Stop with Ctrl-C; the encrypted installation remains
 in its volume. Real `.env`, keys, and documents must not be committed.
+
+## Traffic logs
+
+The app logs `CYNAPSA` request arrival, handler return and failures
+with peer, endpoint, message ID, timing and outcome—not file excerpts, bodies
+or credentials. LLM HTTP access logs are quiet; warnings/errors and connection
+alerts remain. A handler return precedes SDK validation/transmission and is not
+a successful delivery receipt. Rebuild with `./run.sh --build`.

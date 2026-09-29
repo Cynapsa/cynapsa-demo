@@ -54,7 +54,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt /tmp/wheels/*.whl \
     && rm -rf /tmp/wheels
 COPY --from=core-builder /out/libcynapsacore.so /opt/cynapsa/libcynapsacore.so
 COPY --from=sources /src/source-revisions /opt/cynapsa/source-revisions
-COPY app.py bootstrap.py connection_alerts.py llm.py tools.py workflow.py runtime.py entrypoint.sh ./
+COPY app.py bootstrap.py connection_alerts.py rpc_logging.py llm.py tools.py workflow.py runtime.py entrypoint.sh ./
 RUN chmod 0555 /app/entrypoint.sh /opt/cynapsa/libcynapsacore.so
 
 USER 65532:65532

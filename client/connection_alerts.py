@@ -35,7 +35,7 @@ def report_failure(entity, error):
 
 
 @contextmanager
-def watch_connection(session, entity):
+def watch_connection(session, entity, *, quiet=False):
     """Own the session's next_event consumer, not its request-handler stream."""
     stopped = threading.Event()
 
@@ -46,10 +46,11 @@ def watch_connection(session, entity):
             except queue.Empty:
                 continue
             except Exception as error:
-                if not stopped.is_set():
+                if not stopped.is_set() and not quiet:
                     report_failure(entity, error)
                 return
-            report_event(entity, event)
+            if not quiet:
+                report_event(entity, event)
 
     worker = threading.Thread(target=consume, name=f"{entity}-connection-alerts", daemon=True)
     worker.start()
@@ -83,4 +84,3 @@ async def watch_connection_async(session, entity):
             await worker
         except asyncio.CancelledError:
             pass
-

@@ -17,12 +17,21 @@ ENV_FILE=${CYNAPSA_DEMO_CLIENT_ENV_FILE:-$ROOT/.env}
 ACTIVE_VOLUME_FILE=$ROOT/.private/active-volume
 force_enroll=false
 build_requested=false
+quiet=false
+runtime_env=
+build_log=
+cleanup() {
+  [[ -z "$runtime_env" ]] || rm -f -- "$runtime_env"
+  [[ -z "$build_log" ]] || rm -f -- "$build_log"
+}
+trap cleanup EXIT
 
 for option in "$@"; do
   case "$option" in
     --build) build_requested=true ;;
     --force-enroll) force_enroll=true ;;
-    *) echo "usage: ./run.sh [--build] [--force-enroll]" >&2; exit 64 ;;
+    --quiet) quiet=true ;;
+    *) echo "usage: ./run.sh [--build] [--force-enroll] [--quiet]" >&2; exit 64 ;;
   esac
 done
 if [[ -n ${CYNAPSA_DEMO_CLIENT_VOLUME:-} ]]; then
@@ -35,8 +44,21 @@ else
 fi
 
 if [[ $build_requested == true ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "Building the GitHub-backed $ROLE image..."
-  CYNAPSA_DEMO_CLIENT_IMAGE="$IMAGE" "$ROOT/build.sh"
+  if [[ $quiet == true ]]; then
+    build_log=$(mktemp "${TMPDIR:-/tmp}/cynapsa-demo-client-build.XXXXXX")
+    chmod 0600 "$build_log"
+    if CYNAPSA_DEMO_CLIENT_IMAGE="$IMAGE" "$ROOT/build.sh" > "$build_log" 2>&1; then
+      rm -f -- "$build_log"
+      build_log=
+    else
+      build_status=$?
+      cat "$build_log" >&2
+      exit "$build_status"
+    fi
+  else
+    echo "Building the GitHub-backed $ROLE image..."
+    CYNAPSA_DEMO_CLIENT_IMAGE="$IMAGE" "$ROOT/build.sh"
+  fi
 fi
 
 docker volume create "$VOLUME" >/dev/null
@@ -45,11 +67,6 @@ docker_args=(
   -it
   --mount "type=volume,src=$VOLUME,dst=/var/lib/cynapsa"
 )
-runtime_env=
-cleanup() {
-  [[ -z "$runtime_env" ]] || rm -f -- "$runtime_env"
-}
-trap cleanup EXIT
 if [[ -f "$ENV_FILE" ]]; then
   runtime_env=$(mktemp "${TMPDIR:-/tmp}/cynapsa-demo-$ROLE-runtime.XXXXXX")
   chmod 0600 "$runtime_env"
@@ -62,6 +79,7 @@ done
 
 if [[ $force_enroll == true ]]; then
   docker_args+=(--env DEMO_FORCE_ENROLL=1)
-  echo "Force-enrolling $ROLE in its selected state volume."
+  [[ $quiet == true ]] || echo "Force-enrolling $ROLE in its selected state volume."
 fi
+[[ $quiet == false ]] || docker_args+=(--env DEMO_CLIENT_QUIET=1)
 docker run "${docker_args[@]}" "$IMAGE"

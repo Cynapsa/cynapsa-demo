@@ -15,6 +15,7 @@ from llm import ModelClient, ModelError
 from runtime import connection_options, litellm_key
 from tools import FileDatabase
 from workflow import answer_question
+from rpc_logging import configure_logging, log_handler
 
 LOG = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ def main() -> None:
     parser.add_argument("--enroll", action="store_true")
     parser.add_argument("--force-enroll", action="store_true")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     database = FileDatabase(os.environ["DEMO_FILES_DIRECTORY"])
     client = ModelClient(litellm_key(),
                          base_url=os.environ.get("LITELLM_BASE_URL", "https://litellm.eladrave.com"),
@@ -32,6 +33,7 @@ def main() -> None:
     try:
         with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session, watch_connection(session, "demo-files"):
             @session.on("*")
+            @log_handler("demo-files")
             def receive(request: cynapsa.CynapsaRequest) -> dict:
                 try:
                     data = request.json()

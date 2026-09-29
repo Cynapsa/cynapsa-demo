@@ -75,6 +75,19 @@ Changing the ID starts a different chat; it does not erase earlier history.
 
 ## Later runs
 
+For prompts and answers without diagnostic logs, alerts or startup banners:
+
+```sh
+./run.sh --quiet
+```
+
+Rebuild once after updating to this implementation with
+`./run.sh --build --quiet`. Build failures and request failures remain visible;
+successful build output is hidden. Normal runs without `--quiet` retain logs.
+Use `./run.sh --force-enroll --quiet` if a replacement enrollment is required.
+For direct Python execution, the equivalent option is `python app.py --quiet`.
+Quiet mode still drains SDK events and preserves chat citations and `new`.
+
 ```sh
 cd /path/to/cynapsa-demo/client
 ./run.sh

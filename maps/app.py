@@ -18,6 +18,7 @@ from llm import ModelClient, ModelError
 from places import GooglePlaces, PlacesError
 from runtime import connection_options, google_maps_key, litellm_key
 from connection_alerts import watch_connection
+from rpc_logging import configure_logging, log_handler
 
 
 LOG = logging.getLogger(__name__)
@@ -205,12 +206,13 @@ def main() -> None:
     parser.add_argument("--enroll", action="store_true")
     parser.add_argument("--force-enroll", action="store_true")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     model_client = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
     places = GooglePlaces(google_maps_key())
     try:
         with cynapsa.connect(**connection_options(enroll=args.enroll, force_enroll=args.force_enroll)) as session, watch_connection(session, "demo-maps"):
             @session.on("*")
+            @log_handler("demo-maps")
             def receive(request: cynapsa.CynapsaRequest) -> dict:
                 try:
                     data = request.json()

@@ -29,6 +29,11 @@ def test_sdk_dispatch_reuses_owner_loop_for_shared_graph_memory(tmp_path):
     workflow = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = workflow
     spec.loader.exec_module(workflow)
+    log_spec = importlib.util.spec_from_file_location(
+        "sdk_dispatch_logging", ROOT / "orchestrator/rpc_logging.py",
+    )
+    logs = importlib.util.module_from_spec(log_spec)
+    log_spec.loader.exec_module(logs)
 
     async def run():
         owner_loop = asyncio.get_running_loop()
@@ -90,6 +95,7 @@ def test_sdk_dispatch_reuses_owner_loop_for_shared_graph_memory(tmp_path):
             await waiting
             runtime = InboundRuntime(owner, Session(), asynchronous=True)
 
+            @logs.log_handler("demo-orchestrator")
             async def ask(request):
                 loops.append((asyncio.get_running_loop(), threading.get_ident()))
                 entered.set()

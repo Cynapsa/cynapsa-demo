@@ -24,6 +24,28 @@ def event(name, **payload):
     return SimpleNamespace(event_name=name, payload=SimpleNamespace(**payload))
 
 
+def test_quiet_client_monitor_drains_events_and_hides_alerts(capsys):
+    alerts = helper("client")
+    pending = queue.Queue()
+    consumed = threading.Event()
+
+    def next_event(timeout):
+        item = pending.get(timeout=timeout)
+        consumed.set()
+        return item
+
+    with alerts.watch_connection(SimpleNamespace(next_event=next_event), "demo-client", quiet=True):
+        pending.put(event("connectivity.state_changed", previous="available", current="unavailable"))
+        assert consumed.wait(2)
+    assert capsys.readouterr().out == ""
+    assert not any(t.name == "demo-client-connection-alerts" for t in threading.enumerate())
+
+    with alerts.watch_connection(SimpleNamespace(next_event=lambda **_: (_ for _ in ()).throw(RuntimeError("stopped"))),
+                                 "demo-client", quiet=True):
+        pass
+    assert capsys.readouterr().out == ""
+
+
 @pytest.mark.parametrize("entity", ["maps", "orchestrator", "client"])
 def test_sync_monitor_reports_down_recovery_and_real_error(entity, capsys):
     alerts = helper(entity)
@@ -106,7 +128,8 @@ def test_monitor_failure_is_visible_once_without_retry_spin(capsys):
 def test_each_independent_image_includes_its_local_helper():
     copies = [(ROOT / entity / "connection_alerts.py").read_bytes()
               for entity in ("client", "maps", "orchestrator")]
-    assert copies[0] == copies[1] == copies[2]
+    # The client has an intentional quiet option; server copies stay identical.
+    assert copies[1] == copies[2]
     for entity in ("client", "maps", "orchestrator"):
         dockerfile = (ROOT / entity / "Dockerfile").read_text()
         assert "connection_alerts.py" in dockerfile

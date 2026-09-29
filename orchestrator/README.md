@@ -167,3 +167,14 @@ provides `/var/lib/cynapsa-memory` for task-local memory; AWS uses this while
 credentials persist on EFS. Chat history there resets on task replacement.
 Local runs keep the default SQLite path in the existing local Docker volume.
 Do not use NFS/EFS for the live SQLite WAL database or share it between replicas.
+
+## Traffic logs
+
+The app logs `CYNAPSA` arrivals to `/ask`, outgoing Maps/Files requests, their
+responses/failures and handler returns. Traffic records contain
+metadata and timing, not prompts, file contents, bodies or credentials. Local
+log IDs pair each call; inbound records also include the SDK message ID.
+LLM HTTP access logs are quiet. Existing warnings/error diagnostics and
+connection alerts remain. A handler return precedes SDK validation/transmission
+and is not a successful delivery receipt.
+Rebuild with `./run.sh --build`; cloud images need redeployment.

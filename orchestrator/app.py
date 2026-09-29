@@ -22,6 +22,7 @@ from llm import ModelClient, ModelError
 from runtime import STATE, connection_options, litellm_key, maps_agent_id, files_agent_id
 from workflow import ConversationAgent, thread_key
 from connection_alerts import watch_connection_async
+from rpc_logging import configure_logging, log_handler, request_async
 
 
 LOG = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
             )
             await resources.enter_async_context(watch_connection_async(session, "demo-orchestrator"))
             async def ask_maps(question: str) -> dict[str, Any]:
-                remote = await session.request(
+                remote = await request_async(
+                    session, "demo-orchestrator",
                     target, {"question": question}, path="/maps", ttl_ms=100_000
                 )
                 try:
@@ -72,7 +74,8 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
                     raise RuntimeError("maps agent returned an invalid response") from None
 
             async def ask_files(question: str) -> dict[str, Any]:
-                remote = await session.request(
+                remote = await request_async(
+                    session, "demo-orchestrator",
                     files_target, {"question": question}, path="/files", ttl_ms=100_000
                 )
                 try:
@@ -84,6 +87,7 @@ async def serve(*, enroll: bool, force_enroll: bool = False) -> None:
                                       ask_files=ask_files if files_target else None)
 
             @session.on("/ask")
+            @log_handler("demo-orchestrator")
             async def ask(request: cynapsa.CynapsaRequest) -> dict[str, Any]:
                 try:
                     body = AskBody.model_validate(request.json())
@@ -148,7 +152,7 @@ def main() -> None:
     parser.add_argument("--enroll", action="store_true")
     parser.add_argument("--force-enroll", action="store_true")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     try:
         asyncio.run(serve(enroll=args.enroll, force_enroll=args.force_enroll))
     except cynapsa.NativeError as exc:

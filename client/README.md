@@ -65,3 +65,25 @@ client prints canonical remote errors/native errors and continues prompting.
 No active target is unavailable, not automatic delivery to an offline mailbox.
 See [source dependencies](SOURCE_DEPENDENCIES.md) for remote-versus-local SDK
 changes; an unpushed local API removal is not in a GitHub image by assumption.
+
+## Traffic logs
+
+For chat-only output:
+
+```sh
+./run.sh --quiet
+```
+
+On the first run after updating this code, rebuild with
+`./run.sh --build --quiet`. The Python app also accepts `python app.py --quiet`.
+Quiet mode hides Python logs, connection alerts and startup banners while
+keeping the input prompt, answers, citations, user-triggered `new` conversation
+IDs, and request failures. The SDK event observer still drains events silently.
+Successful build output is hidden; build/startup failures remain visible.
+It can be combined with `--force-enroll` without changing credentials or volumes.
+This is a demo-client option, not a new SDK/Core flag; other agents are unchanged.
+
+The app prints `CYNAPSA` metadata logs when `/ask` is submitted and its response
+arrives, or when it fails. Request/response bodies and credentials are excluded;
+the answer still prints normally. HTTP library access logs are quiet, but
+warnings/errors and connection alerts remain. Rebuild with `./run.sh --build`.

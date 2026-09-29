@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
 import queue
 import sys
 import threading
@@ -20,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load(name, path, monkeypatch):
+    if path.name == "app.py":
+        load("rpc_logging", path.parent / "rpc_logging.py", monkeypatch)
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, name, module)
@@ -50,7 +53,8 @@ def sdk_stub(monkeypatch):
 
 
 @pytest.mark.parametrize("use_files", [False, True])
-def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeypatch, tmp_path, use_files):
+def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeypatch, tmp_path, use_files, caplog):
+    caplog.set_level(logging.INFO, logger="demo.cynapsa")
     async def run():
         sdk = sdk_stub(monkeypatch)
         ready = asyncio.Event()
@@ -122,10 +126,18 @@ def test_orchestrator_handler_uses_authenticated_metadata_and_remote_rpc(monkeyp
             def request(prompt, sender="client-a@example.test", mesh="test-mesh", cid="chat-1"):
                 return SimpleNamespace(
                     from_agent_id=sender, mesh_id=mesh,
+                    path="/ask", message_id="inbound-1", mode="rpc",
                     json=lambda: {"prompt": prompt, "conversation_id": cid},
                 )
 
             first = await session.handler(request("My test address; find a gym"))
+            traffic = [json.loads(record.getMessage().removeprefix("CYNAPSA "))
+                       for record in caplog.records if record.name == "demo.cynapsa"]
+            assert [item["event"] for item in traffic] == [
+                "request.received", "request.started", "response.received", "handler.returned",
+            ]
+            assert traffic[0]["path"] == "/ask"
+            assert traffic[1]["path"] == ("/files" if use_files else "/maps")
             assert first["conversation_id"] == "chat-1"
             session.request.assert_awaited_once_with(
                 "files@example.test" if use_files else "maps@example.test",
@@ -205,7 +217,11 @@ def test_orchestrator_storage_startup_failure_never_opens_session(monkeypatch, t
     client.close.assert_called_once()
 
 
-def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys):
+@pytest.mark.parametrize("quiet", [False, True])
+def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys, caplog, quiet):
+    # The actual client runs once per process; isolate its logging.disable here.
+    previous_disable = logging.root.manager.disable
+    caplog.set_level(logging.INFO)
     sdk = sdk_stub(monkeypatch)
 
     class Session:
@@ -231,13 +247,62 @@ def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys):
         orchestrator_agent_id=lambda: "orchestrator@example.test",
     ))
     monkeypatch.setenv("DEMO_CONVERSATION_ID", "resumed-chat")
-    monkeypatch.setattr(sys, "argv", ["app.py"])
+    monkeypatch.setattr(sys, "argv", ["app.py"] + (["--quiet"] if quiet else []))
     inputs = iter(["first", "follow up", "new", "fresh question", "quit"])
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
     load("connection_alerts", ROOT / "client/connection_alerts.py", monkeypatch)
     app = load("demo_client_adapter", ROOT / "client/app.py", monkeypatch)
-    app.main()
+    try:
+        app.main()
+    finally:
+        logging.disable(previous_disable)
     bodies = [call.args[1] for call in session.request.call_args_list]
     assert bodies[0]["conversation_id"] == bodies[1]["conversation_id"] == "resumed-chat"
     assert bodies[2]["conversation_id"] != "resumed-chat"
-    assert "Conversation: resumed-chat" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert ("Conversation: resumed-chat" in output) is not quiet
+    assert ("demo-client ready as" in output) is not quiet
+    assert "ok" in output
+    assert ("CYNAPSA" in caplog.text) is not quiet
+
+
+def test_quiet_client_keeps_prompts_answers_and_failures(monkeypatch, capsys, caplog):
+    sdk = sdk_stub(monkeypatch)
+    from contextlib import nullcontext
+    session = SimpleNamespace(
+        request=Mock(side_effect=[
+            sdk.NativeError("request denied"),
+            SimpleNamespace(status_code=404, error=SimpleNamespace(code="not_found", detail="Missing endpoint")),
+            SimpleNamespace(status_code=200, json=lambda: {"answer": "Chat answer", "maps": None}),
+        ]),
+    )
+    sdk.connect = Mock(return_value=nullcontext(session))
+    monkeypatch.setitem(sys.modules, "runtime", SimpleNamespace(
+        prepare_runtime=lambda: None, connection_options=lambda **_: {},
+        orchestrator_agent_id=lambda: "orchestrator@example.test",
+    ))
+    watch = Mock(return_value=nullcontext())
+    monkeypatch.setitem(sys.modules, "connection_alerts", SimpleNamespace(watch_connection=watch))
+    monkeypatch.setattr(sys, "argv", ["app.py", "--quiet"])
+    inputs = iter(["one", "two", "three", "quit"])
+
+    def input_prompt(prompt):
+        print(prompt, end="")
+        logging.getLogger("third.party").error("Hidden diagnostic")
+        return next(inputs)
+
+    monkeypatch.setattr("builtins.input", input_prompt)
+    app = load("demo_quiet_client_adapter", ROOT / "client/app.py", monkeypatch)
+    previous_disable = logging.root.manager.disable
+    try:
+        app.main()
+    finally:
+        logging.disable(previous_disable)
+    output = capsys.readouterr().out
+    assert 'Ask a question (or "quit"):' in output
+    assert "Request failed: request denied" in output
+    assert "Request failed (404 not_found): Missing endpoint" in output
+    assert "Chat answer" in output
+    assert "ready as" not in output and "Conversation:" not in output
+    assert "CYNAPSA" not in caplog.text and "Hidden diagnostic" not in caplog.text
+    watch.assert_called_once_with(session, "demo-client", quiet=True)

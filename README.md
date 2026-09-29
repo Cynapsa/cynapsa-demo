@@ -1,5 +1,30 @@
 # Cynapsa Demo
 
+All four entities log Cynapsa RPC traffic at INFO under `demo.cynapsa`:
+`request.started`, `request.received`, `response.received`, `handler.returned`,
+and failures. Logs contain entity, peer, endpoint, a local log ID, elapsed time
+and status/error category. Inbound records include the SDK message ID. No
+prompt, response body, file content, headers or credentials are added to these
+traffic logs. Metadata is bounded and JSON-escaped; protect logs containing
+identities. The local log ID pairs records within one call, not across agents.
+`request.started` means submission started, not confirmed delivery;
+`handler.returned` precedes SDK response validation/transmission and does not
+imply a successful reply. Ordinary dict/None returns have no logged status;
+explicit response objects report their declared status, not validation success.
+MSG handlers log completion instead of claiming a reply. These wrappers do not
+add an SDK event consumer or alter request arguments, results or exceptions.
+
+External HTTP access logs (`httpx`, `httpcore`, `urllib3`, `requests`) are reduced
+to WARNING, so successful model/Places calls no longer print `HTTP Request:`.
+Warnings, errors, private application diagnostics and connection alerts remain.
+Rebuild/restart local images with `./run.sh --build` to apply code changes;
+existing cloud images require a separate build and deployment.
+The interactive client additionally supports `./run.sh --quiet` (or
+`python app.py --quiet`): no logs, connection alerts or startup banners, but
+chat prompts, answers, citations and request failures remain. On an existing
+installation, use `./run.sh --build --quiet` once to rebuild updated code.
+Successful build progress is hidden; build/startup failures remain visible.
+
 Console alerts observe the SDK event stream independently of request handling
 and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
 by recovery to `available` or failure to `unavailable`. SDK lifecycle changes

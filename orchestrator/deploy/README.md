@@ -1,21 +1,22 @@
 # AWS orchestrator deployment
 
 Updated 2026-09-29: account `821211778460`, region `us-east-1`, ECS cluster `cynapsa-demo`,
-service `demo-orchestrator`, task definition `demo-orchestrator:2`. Exact inputs
+service `demo-orchestrator`, task definition `demo-orchestrator:3`. Exact inputs
 are in `aws-task-definition.json`; it contains references, not secret values.
 One on-demand Fargate task: 0.5 vCPU, 1 GiB, Linux amd64, platform 1.4.0.
 No HTTP listener/load balancer or task-security-group ingress. Public-subnet
 outbound access enables Cynapsa and the model gateway; this does not promise P2P.
 
-Application source `7845b1c` on main. Core
+Application source `6e442e1` on main. Core
 `46b89c89abf129fef1668c86f0130fd715ac0ab6`, SDK
 `11146ed796146a281ce4c0ea5cd2dc22e76a83fa` are recorded in the image.
 ECR image digest:
-`sha256:41cb670f79068e1e4b05ad2ffc32235702ad55f97148a4927658c92bba67d40d`.
+`sha256:0d075fd685669a1e87bd8664920dc5ac9e887debdb2cc04b23a55f62e2c8b185`.
 GitHub credentials were BuildKit-only secrets, never provided at runtime.
 
-Both `DEMO_MAPS_AGENT_ID` (GCP) and `DEMO_FILES_AGENT_ID` (separately run Files)
-are configured. Files/database and client are not deployed by this cloud swap;
+`DEMO_MAPS_AGENT_ID` (GCP), `DEMO_FILES_AGENT_ID` (separately run Files), and
+`DEMO_CLIENT_AGENT_ID` (incoming log label) are configured. Files/database and
+client are not deployed by this cloud swap;
 start them locally. Destination identities do not change when moving clouds.
 
 ## Credentials, memory and access
@@ -81,3 +82,15 @@ through AWS orchestrator -> GCP Maps, and both agents emitted Cynapsa traffic
 records. That verifies one request, not recovery or high availability. The
 temporary laptop client was stopped. Chat memory on task-local SQLite resets
 on task replacement; the EFS installation profile is retained.
+
+Revision `demo-orchestrator:3` runs image digest `0d075f...` with the simple
+full-content traffic logs and an exact-ID `client` label. The rollout completed
+with one task running; startup reported the expected identity and available
+mesh connectivity. A new live question reached the orchestrator and GCP Maps,
+but the client reported an authorization error. Maps logged the same arrival
+multiple times and handler returns; the orchestrator eventually logged a Maps
+RPC timeout and a generic failed response. End-to-end delivery is therefore
+**not verified** for this rollout. This failure is not attributed to the log
+format without further investigation. Avoid repeating the live question until
+the duplicate arrivals/timeout are understood, since they invoke the model and
+Places API repeatedly.

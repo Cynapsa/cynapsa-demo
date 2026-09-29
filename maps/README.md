@@ -90,9 +90,11 @@ not include unpushed local changes by assumption.
 
 ## Traffic logs
 
-The app logs `CYNAPSA` request arrival, handler return and failures
-with peer, endpoint, message ID, timing and outcome—not request/response bodies
-or credentials. LLM/Places HTTP access logs are quiet; warnings/errors and
-connection alerts remain. A handler return precedes SDK validation/transmission
-and is not a successful delivery receipt.
+The app logs incoming Cynapsa request bodies and handler return values in a
+simple human-readable format, with the peer's full ID. Set
+`DEMO_ORCHESTRATOR_AGENT_ID` to label that incoming peer as `orchestrator`.
+There is no redaction or truncation: do not send sensitive content to this demo
+if cloud logs are not appropriate. Headers are not logged. LLM/Places HTTP
+access logs are quiet; warnings/errors and connection alerts remain. A handler
+return precedes SDK validation/transmission and is not a delivery receipt.
 Rebuild with `./run.sh --build`; cloud images need redeployment.

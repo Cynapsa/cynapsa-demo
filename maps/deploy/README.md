@@ -1,11 +1,11 @@
 # GCP Maps deployment
 
 Updated 2026-09-29: project `aztm-amesh`, region `us-central1`, worker pool
-`cynapsa-demo-maps`, one instance. Revision `cynapsa-demo-maps-00008-m4m`.
+`cynapsa-demo-maps`, one instance. Revision `cynapsa-demo-maps-00009-5hj`.
 
 Image:
-`us-central1-docker.pkg.dev/aztm-amesh/cynapsa-v2/cynapsa-demo-maps@sha256:f4e7fb03ecb717ea8ed2ee8d0024435a8b53ec625a2ff521fa87c9563f883d19`.
-Application source `7845b1c` on main.
+`us-central1-docker.pkg.dev/aztm-amesh/cynapsa-v2/cynapsa-demo-maps@sha256:baa453fa2581b8f98238bbbc9bca38d12c00a6f183b9f262341dd5af76a83e7f`.
+Application source `6e442e1` on main.
 Core `46b89c89abf129fef1668c86f0130fd715ac0ab6`, SDK
 `11146ed796146a281ce4c0ea5cd2dc22e76a83fa` are recorded in the image.
 
@@ -19,6 +19,8 @@ Service account `cynapsa-demo-workers@aztm-amesh.iam.gserviceaccount.com`.
 Mesh `cynapsa_demo_cynapsa_demo`, model `gpt-5.6-terra-high`, gateway
 `https://litellm.eladrave.com`. Gemini and old credential-seed bindings were
 removed from this revision; their secret resources were not deleted.
+`DEMO_ORCHESTRATOR_AGENT_ID` labels the authenticated incoming peer in simple
+request/response logs. Full content is logged without redaction or truncation.
 
 The worker enrolls a new installation when its ephemeral filesystem is empty.
 Profiles are not on a persistent volume. Replacement can require another
@@ -47,3 +49,10 @@ the GCP Maps agent handled its `/maps` RPC and the client received an address
 and Maps citations. The new logs show request arrival and handler return while
 successful model/Places HTTP access logging stays quiet. This is a single
 cross-cloud smoke test, not transport, HA or renewal qualification.
+
+After revision `00009-5hj`, a live client request appeared in AWS and Maps
+traffic logs with friendly names, full IDs and content. The new revision is
+ready and reports available mesh connectivity. However, the client returned an
+authorization error; Maps logged repeated arrivals and handler returns, while
+the orchestrator later timed out waiting for Maps. The new end-to-end path is
+not yet verified. Repeating this test can invoke paid APIs multiple times.

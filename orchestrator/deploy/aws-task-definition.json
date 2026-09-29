@@ -28,7 +28,7 @@
   "containerDefinitions": [
     {
       "name": "demo-orchestrator",
-      "image": "821211778460.dkr.ecr.us-east-1.amazonaws.com/cynapsa-demo-orchestrator@sha256:41cb670f79068e1e4b05ad2ffc32235702ad55f97148a4927658c92bba67d40d",
+      "image": "821211778460.dkr.ecr.us-east-1.amazonaws.com/cynapsa-demo-orchestrator@sha256:0d075fd685669a1e87bd8664920dc5ac9e887debdb2cc04b23a55f62e2c8b185",
       "essential": true,
       "user": "65532:65532",
       "stopTimeout": 120,

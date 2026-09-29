@@ -99,8 +99,10 @@ in its volume. Real `.env`, keys, and documents must not be committed.
 
 ## Traffic logs
 
-The app logs `CYNAPSA` request arrival, handler return and failures
-with peer, endpoint, message ID, timing and outcome—not file excerpts, bodies
-or credentials. LLM HTTP access logs are quiet; warnings/errors and connection
-alerts remain. A handler return precedes SDK validation/transmission and is not
-a successful delivery receipt. Rebuild with `./run.sh --build`.
+The app logs full incoming Cynapsa request bodies and handler return values,
+including file excerpts returned to callers, with the peer's full ID. Set
+`DEMO_ORCHESTRATOR_AGENT_ID` to label that incoming peer as `orchestrator`.
+There is no redaction or truncation, so use only non-sensitive demo files.
+Headers are not logged. LLM HTTP access logs are quiet; warnings/errors and
+connection alerts remain. A handler return precedes SDK validation/transmission
+and is not a delivery receipt. Rebuild with `./run.sh --build`.

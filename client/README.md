@@ -83,7 +83,9 @@ Successful build output is hidden; build/startup failures remain visible.
 It can be combined with `--force-enroll` without changing credentials or volumes.
 This is a demo-client option, not a new SDK/Core flag; other agents are unchanged.
 
-The app prints `CYNAPSA` metadata logs when `/ask` is submitted and its response
-arrives, or when it fails. Request/response bodies and credentials are excluded;
-the answer still prints normally. HTTP library access logs are quiet, but
-warnings/errors and connection alerts remain. Rebuild with `./run.sh --build`.
+Without `--quiet`, the app logs the full `/ask` request and response content,
+the orchestrator's friendly name and full ID, or a request failure. There is no
+redaction or truncation; do not put sensitive prompts in this demo if logs will
+be shared. Headers are not logged. The answer also prints normally. HTTP access
+logs are quiet, but warnings/errors and connection alerts remain. Rebuild with
+`./run.sh --build` to update the local image.

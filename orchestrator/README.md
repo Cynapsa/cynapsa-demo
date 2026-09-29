@@ -170,11 +170,12 @@ Do not use NFS/EFS for the live SQLite WAL database or share it between replicas
 
 ## Traffic logs
 
-The app logs `CYNAPSA` arrivals to `/ask`, outgoing Maps/Files requests, their
-responses/failures and handler returns. Traffic records contain
-metadata and timing, not prompts, file contents, bodies or credentials. Local
-log IDs pair each call; inbound records also include the SDK message ID.
-LLM HTTP access logs are quiet. Existing warnings/error diagnostics and
-connection alerts remain. A handler return precedes SDK validation/transmission
-and is not a successful delivery receipt.
+The app logs full Cynapsa request/response content for `/ask` and downstream
+Maps/Files calls, with each peer's full ID. Set `DEMO_CLIENT_AGENT_ID` to label
+the incoming client as `client`; outgoing Maps/Files names come from their
+destination-ID variables. There is no redaction or truncation, so prompts and
+file evidence may appear in cloud logs. Headers are not logged. LLM HTTP access
+logs are quiet. Existing warnings/error diagnostics and connection alerts
+remain. A handler return precedes SDK validation/transmission and is not a
+delivery receipt.
 Rebuild with `./run.sh --build`; cloud images need redeployment.

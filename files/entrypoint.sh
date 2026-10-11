@@ -36,6 +36,8 @@ if [ "$profile_present" = false ] && \
 fi
 unset DEMO_STATE_KEY_B64 DEMO_STATE_PROFILE_B64 DEMO_STATE_PROFILE_FILENAME
 
+set -- cynapsa run --mesh-id "${DEMO_MESH_ID:?DEMO_MESH_ID is required}" \
+  --profile-id demo-files --rpc-timeout-ms 110000
 if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   if [ -n "${CYNAPSA_TOKEN:-}" ]; then
     printf '%s' "$CYNAPSA_TOKEN" > "$private_directory/enrollment_token"
@@ -47,14 +49,10 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   fi
   chmod 600 "$private_directory/enrollment_token"
   unset CYNAPSA_TOKEN
+  set -- "$@" --token-file "$private_directory/enrollment_token"
   if [ "${DEMO_FORCE_ENROLL:-}" = 1 ]; then
-    cynapsa run --mesh-id "$DEMO_MESH_ID" --profile-id demo-files \
-      --token-file "$private_directory/enrollment_token" --force-enroll \
-      -- python /app/bootstrap.py
-    rm -f "$private_directory/enrollment_token"
-    exec python /app/app.py
+    set -- "$@" --force-enroll
   fi
-  exec python /app/app.py --enroll
 fi
 unset CYNAPSA_TOKEN
-exec python /app/app.py
+exec "$@" -- uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log

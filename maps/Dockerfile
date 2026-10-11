@@ -7,13 +7,15 @@ RUN apk add --no-cache ca-certificates git
 COPY github-askpass.sh /usr/local/bin/cynapsa-git-askpass
 RUN chmod 0555 /usr/local/bin/cynapsa-git-askpass
 ARG SOURCE_REFRESH
+ARG CORE_GIT_REF=bridge-adaptation
+ARG SDK_GIT_REF=bridge-adaptation
 RUN --mount=type=secret,id=github_token,required=true \
     set -eu; \
     : "$SOURCE_REFRESH"; \
     export GIT_ASKPASS=/usr/local/bin/cynapsa-git-askpass GIT_TERMINAL_PROMPT=0; \
-    git clone --quiet --depth 1 --single-branch --branch main \
+    git clone --quiet --depth 1 --single-branch --branch "$CORE_GIT_REF" \
       https://github.com/Cynapsa/cynapsagocore.git /src/core; \
-    git clone --quiet --depth 1 --single-branch --branch main \
+    git clone --quiet --depth 1 --single-branch --branch "$SDK_GIT_REF" \
       https://github.com/Cynapsa/cynapsa-python-sdk.git /src/sdk; \
     printf 'go_core=%s\nsdk=%s\n' \
       "$(git -C /src/core rev-parse HEAD)" "$(git -C /src/sdk rev-parse HEAD)" \

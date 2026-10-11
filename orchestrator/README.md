@@ -26,7 +26,7 @@ native/internal failures. Validation, timeout, and model failures have distinct
 public codes below. Treat terminal details/traces as private.
 
 The directory is independently runnable. Its image build fetches the Python
-SDK and Go Core `main` branches from GitHub; it does not use
+SDK and Go Core `bridge-adaptation` branches from GitHub; it does not use
 repository-root files or sibling directories. Set `CYNAPSA_GITHUB_TOKEN`
 in this directory's ignored `.env` for builds. It is not sent to the
 running container.

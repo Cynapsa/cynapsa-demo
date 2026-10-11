@@ -1,6 +1,7 @@
 # Cynapsa Demo
 
-All four entities log simple Cynapsa traffic lines at INFO under `demo.cynapsa`:
+The three native entities log simple Cynapsa traffic lines at INFO under
+`demo.cynapsa`:
 
 ```text
 [client] request sent to orchestrator (agent-id@connect.cynapsa.com) /ask: {"prompt": "Find a cafe"}
@@ -16,14 +17,15 @@ peer names require an exact bare-ID match against `DEMO_CLIENT_AGENT_ID`,
 that entity's environment; otherwise only the full ID appears. Outbound
 destinations already have those variables. For incoming names, optionally set
 `DEMO_CLIENT_AGENT_ID` on the orchestrator and
-`DEMO_ORCHESTRATOR_AGENT_ID` on maps/files. `request sent` marks a call to the
+`DEMO_ORCHESTRATOR_AGENT_ID` on maps. `request sent` marks a call to the
 SDK, not confirmed delivery. `response returned` is logged before SDK
 validation/transmission. MSG handlers log only the incoming request. These
 wrappers do not change request arguments, results or exceptions.
 
 External HTTP access logs (`httpx`, `httpcore`, `urllib3`, `requests`) are reduced
 to WARNING, so successful model/Places calls no longer print `HTTP Request:`.
-Warnings, errors, private application diagnostics and connection alerts remain.
+Warnings, errors, and private application diagnostics remain. The three native
+entities also retain their SDK connection alerts.
 Rebuild/restart local images with `./run.sh --build` to apply code changes;
 existing cloud images require a separate build and deployment.
 The interactive client additionally supports `./run.sh --quiet` (or
@@ -32,7 +34,7 @@ chat prompts, answers, citations and request failures remain. On an existing
 installation, use `./run.sh --build --quiet` once to rebuild updated code.
 Successful build progress is hidden; build/startup failures remain visible.
 
-Console alerts observe the SDK event stream independently of request handling
+For the native entities, console alerts observe the SDK event stream independently of request handling
 and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
 by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
 and canonical `core.error` details are also printed when emitted. A disconnect
@@ -41,12 +43,12 @@ The observer owns `next_event()` and stops before intentional session teardown.
 Rebuild with `./run.sh --build` after the updated demo and Core sources have
 been pushed; existing images do not gain these changes automatically.
 
-This repository contains four independent native Cynapsa identities:
+This repository contains four independent agent identities:
 
 - [`client/`](client/) — an interactive laptop client.
 - [`orchestrator/`](orchestrator/) — LangGraph reasoning with persistent conversation memory and a remote Maps tool.
 - [`maps/`](maps/) — an independent LangGraph using the LiteLLM gateway and Google Places.
-- [`files/`](files/) — a read-only LangGraph agent searching a configured local document directory.
+- [`files/`](files/) — a plain FastAPI/LangGraph app searching a read-only local document directory; the CLI supplies Cynapsa login and routing.
 
 AI agents and operators should follow [`AGENTS.md`](AGENTS.md) for the complete
 startup order, runtime variables, state-volume rules, and verification signals.
@@ -74,14 +76,13 @@ container entirely from that directory when its local image is missing. No
 credentials, enrollment tokens, or Cynapsa installation profiles are committed
 to this repository.
 
-Each build fetches the current `main` branches of the SDK and
+On this temporary branch, each build fetches the `bridge-adaptation` branches of the SDK and
 Go Core directly from GitHub. These builds
 require an ejabberd authority with the matching peer-handshake protocol; they
 are not compatible with a server still running the old snapshot protocol.
 
 “Current” above means the remote heads fetched at build time, not uncommitted
-or unpushed local SDK/Core edits. Local-policy removal, the SDK async-loop fix,
-and Core connectivity events have been published on those branches. An existing
+or unpushed local SDK/Core edits. An existing
 container still uses its original sources: rebuild and verify the recorded SDK
 and Core SHAs before assuming it includes a new fix. Local tests and source
 review do not qualify a cloud deployment or prove live revocation behavior.
@@ -92,7 +93,7 @@ Clone the repository, enter the identity directory, and create its ignored
 environment file. For example, to run the client:
 
 ```sh
-git clone https://github.com/Cynapsa/cynapsa-demo.git
+git clone --branch bridge-adaptation https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo/client
 cp .env.example .env
 # Edit .env and replace the placeholders.
@@ -164,7 +165,7 @@ overwriting the first one. Each identity's README contains an example.
 
 ## Rebuilds
 
-Use `./run.sh --build` to fetch fresh `main` branch heads and
+Use `./run.sh --build` to fetch fresh `bridge-adaptation` branch heads and
 rebuild. `CYNAPSA_DEMO_PLATFORM` remains available for an explicit Docker
 target platform. The default image tag distinguishes these GitHub-backed
 builds from old vendored images. If you set a custom image tag, run
@@ -173,7 +174,7 @@ image is missing.
 
 See each directory's `SOURCE_DEPENDENCIES.md` for build provenance and
 source-versus-local limits. A direct `./build.sh` defaults to a `:local` tag,
-whereas `run.sh` defaults to `:github-main-<Docker-server-arch>`;
+whereas `run.sh` defaults to `:bridge-adaptation-<Docker-server-arch>`;
 use `run.sh --build` or set the same image override when building separately.
 
 ## Runtime limits and errors
@@ -223,8 +224,9 @@ not an offline installation mailbox or application delivery receipt.
 
 Follow [files/README.md](files/README.md) to configure `DEMO_FILES_DIRECTORY`,
 its enrollment token, and its LLM key. The runner binds that directory read-only;
-supported files are UTF-8 text, Markdown, CSV, and JSON. Add the printed bare JID
-as `DEMO_FILES_AGENT_ID` in the orchestrator's `.env`, then rebuild/restart the
+supported files are UTF-8 text, Markdown, CSV, and JSON. Copy its bare JID from
+the portal identity page into `DEMO_FILES_AGENT_ID` in the orchestrator's
+`.env`, then rebuild/restart the
 orchestrator and client. Blank/absent leaves the original maps-only toolset.
 Start files alongside maps before the orchestrator. No automatic deployment or
 portal identity creation is performed by this source change.

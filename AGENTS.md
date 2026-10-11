@@ -25,7 +25,7 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
 Every directory is independently runnable. Its `run.sh` builds a local
 container image from that directory when the image is not already available.
 The directory includes its own application, Docker build, and runtime scripts.
-During each image build, it fetches the `main` branches of the
+During each image build on this temporary demo branch, it fetches the `bridge-adaptation` branches of the
 Python SDK and Go Core from GitHub using `CYNAPSA_GITHUB_TOKEN` as a BuildKit
 secret. Put that token in the entity's ignored `.env`; it needs read access to
 both repositories and is never passed to the running container. Enrollment
@@ -267,8 +267,8 @@ an active enrollment grant with capacity for a new installation.
 
 ## Expected failure signals
 
-All four entities own one SDK `next_event()` consumer for console alerts.
-It runs in a background thread in maps/files/client and an async task in the
+The three native entities own one SDK `next_event()` consumer for console alerts.
+It runs in a background thread in maps/client and an async task in the
 orchestrator, separately from handlers and user input. Do not add another
 competing `next_event()` consumer without event fan-out.
 Connectivity and SDK lifecycle transitions print an `ALERT`; canonical
@@ -279,10 +279,12 @@ Observers stop before intentional session teardown; disconnects do not
 automatically terminate these application processes.
 Alerts are best-effort observations on bounded SDK queues, not a durable
 audit log or an authorization/keepalive mechanism.
-Each directory owns its identical `rpc_logging.py` helper and packages it in
-its image. Main configures external HTTP libraries at WARNING, retaining error
-diagnostics. Native outgoing calls use `request_sync`/`request_async`; handlers
-apply `@log_handler` underneath `@session.on`, preserving async classification.
+The three native directories own identical `rpc_logging.py` helpers. Main
+configures external HTTP libraries at WARNING, retaining error diagnostics.
+Native outgoing calls use `request_sync`/`request_async`; handlers apply
+`@log_handler` underneath `@session.on`, preserving async classification.
+The files directory is a plain HTTP app and has no SDK event consumer or
+peer-ID traffic log; it logs its question and response body through FastAPI.
 Traffic INFO records are simple request/response lines with full message
 content (no redaction or truncation); headers are not logged. Keep sensitive
 data out of demo requests because cloud logs retain it. Friendly peer names
@@ -380,13 +382,16 @@ same GitHub-backed SDK/Core build and genuine force-enroll flow. Create its
 identity in the mesh, configure `.env` with `CYNAPSA_TOKEN`, `DEMO_MESH_ID`,
 `CYNAPSA_GITHUB_TOKEN`, `LITELLM_API_KEY` and absolute `DEMO_FILES_DIRECTORY`.
 The runner mounts only that directory read-only at `/data`; the image never
-includes database content. Add its printed bare JID as `DEMO_FILES_AGENT_ID`
+includes database content. Get its bare JID from the portal's identity page
+and add it as `DEMO_FILES_AGENT_ID`
 in orchestrator `.env`. Start files/maps, then orchestrator, then client.
 Without that destination the orchestrator retains its original toolset.
 
 Tools are list/search/read for bounded UTF-8 `.txt/.md/.csv/.json` files; no
 symlinks, hidden files, path escape, write tools, PDF, or vector database.
-The files graph is local and exchanges native RPCs, not graph objects.
+The files graph is local. The orchestrator sends native Cynapsa RPCs; the
+CLI's FastAPI hook delivers them to the files app as HTTP POST `/files`, not
+as shared graph objects or an inter-agent HTTP socket.
 Sources contain relative paths/lines/excerpts; no evidence forces not-found.
 Documents are untrusted data. Excerpts leave the machine for the model and
 orchestrator. All authorized mesh callers share access to this directory.

@@ -1,7 +1,8 @@
 # GitHub source dependencies
 
-This directory builds independently. Its Dockerfile fetches the current
-`main` branch heads from:
+This directory builds independently. On the temporary `bridge-adaptation`
+demo branch, its Dockerfile fetches the SDK and Go Core `bridge-adaptation`
+branch heads from:
 
 - `https://github.com/Cynapsa/cynapsagocore.git`
 - `https://github.com/Cynapsa/cynapsa-python-sdk.git`
@@ -14,15 +15,15 @@ not a build argument, image layer, or runtime environment variable.
 IDs at `/opt/cynapsa/source-revisions`. The SDK build verifies its vendored
 header/conformance hashes against the fetched Core working tree using
 `verify_core_provenance.py --commit WORKTREE`. This permits implementation-only
-branch updates without requiring the SDK's historical pinned commit in a
-depth-1 clone. It is a public-contract compatibility check, not equality to
-that historical commit; the recorded SHAs identify the actual sources.
+branch updates without requiring full Git history in a depth-1 clone. It is a
+public-contract compatibility check; the recorded SHAs identify the actual
+sources.
 Incompatible headers/conformance still fail the build.
 ## Source versus local changes
 
-The Dockerfile clones remote `main` heads, never a sibling checkout,
-vendored tree, or unpushed local SDK/Core edit. Local-policy removal, the SDK
-async-loop fix, and Core connectivity events are published on those branches.
+The Dockerfile clones remote `bridge-adaptation` heads, never a sibling checkout,
+vendored tree, or unpushed local SDK/Core edit. Changes made after the last
+push are not in a Docker build.
 Existing containers are not updated by a source push: rebuild and verify the
 recorded revisions. Source review and local tests do not qualify a deployment
 or prove live revocation behavior.
@@ -47,7 +48,7 @@ fetched SDK manifest hashes and Core contract files do not agree; never bypass i
 
 `run.sh` builds only for a missing selected image or `--build`; `--force-enroll`
 is not a rebuild flag. Direct `build.sh` defaults to the role's `:local` tag,
-while `run.sh` uses `:github-main-<Docker-server-arch>`. Set the same
+while `run.sh` uses `:bridge-adaptation-<Docker-server-arch>`. Set the same
 role-specific image override for both, or use `run.sh --build`. Platform,
 image, environment-file, and volume overrides are shell controls, not loaded
 from the entity runtime env file. Existing containers retain their original

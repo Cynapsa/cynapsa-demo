@@ -13,11 +13,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLES = ("client", "maps", "orchestrator", "files")
+NATIVE_ROLES = ("client", "maps", "orchestrator")
 
 
 class ForceEnrollTests(unittest.TestCase):
     def test_runtime_passes_native_force_option(self) -> None:
-        for role in ROLES:
+        for role in NATIVE_ROLES:
             with self.subTest(role=role), tempfile.TemporaryDirectory(dir=ROOT) as scratch:
                 spec = importlib.util.spec_from_file_location(
                     f"demo_{role}_runtime", ROOT / role / "runtime.py"
@@ -124,7 +125,7 @@ class ForceEnrollTests(unittest.TestCase):
                 )
 
     def test_entrypoint_runs_cli_force_enroll_before_native_app(self) -> None:
-        for role in ROLES:
+        for role in NATIVE_ROLES:
             with self.subTest(role=role), tempfile.TemporaryDirectory(dir=ROOT) as scratch:
                 scratch_path = Path(scratch)
                 state = scratch_path / "state"
@@ -184,6 +185,58 @@ class ForceEnrollTests(unittest.TestCase):
                 rejected = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
                 self.assertEqual(rejected.returncode, 42, rejected.stderr)
                 self.assertFalse(log.exists(), "native app must not start after CLI failure")
+
+    def test_files_entrypoint_runs_http_app_through_cli(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as scratch:
+            root = Path(scratch)
+            state = root / "state"
+            state.mkdir()
+            private = root / "private"
+            fake_cli = root / "cynapsa"
+            cli_log = root / "cli.log"
+            fake_cli.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CYNAPSA_LOG"\n'
+                '[ "${TEST_CLI_FAIL:-}" != 1 ] || exit 42\n', encoding="utf-8"
+            )
+            fake_cli.chmod(0o755)
+            env = os.environ.copy()
+            env.update({
+                "PATH": f"{root}{os.pathsep}{env['PATH']}",
+                "CYNAPSA_STATE_DIRECTORY": str(state),
+                "DEMO_PRIVATE_DIRECTORY": str(private),
+                "DEMO_SECRET_SOURCE_DIRECTORY": str(root / "secrets"),
+                "CYNAPSA_LOG": str(cli_log),
+                "DEMO_MESH_ID": "test-mesh",
+                "LITELLM_API_KEY": "test-only-key",
+            })
+            command = ["/bin/sh", str(ROOT / "files/entrypoint.sh")]
+            missing = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 78, missing.stderr)
+            self.assertFalse(cli_log.exists())
+
+            env["CYNAPSA_TOKEN"] = "test-only-token"
+            enrolled = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual(enrolled.returncode, 0, enrolled.stderr)
+            self.assertIn(
+                f"run --mesh-id test-mesh --profile-id demo-files --rpc-timeout-ms 110000 "
+                f"--token-file {private / 'enrollment_token'} -- uvicorn app:app "
+                "--host 127.0.0.1 --port 8000 --no-access-log",
+                cli_log.read_text(),
+            )
+
+            (state / "profile-v2-test.state").write_text("placeholder")
+            cached = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual(cached.returncode, 0, cached.stderr)
+            self.assertNotIn("--token-file", cli_log.read_text().splitlines()[-1])
+
+            env["DEMO_FORCE_ENROLL"] = "1"
+            forced = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual(forced.returncode, 0, forced.stderr)
+            self.assertIn("--token-file", cli_log.read_text().splitlines()[-1])
+            self.assertIn("--force-enroll -- uvicorn", cli_log.read_text().splitlines()[-1])
+            env["TEST_CLI_FAIL"] = "1"
+            rejected = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual(rejected.returncode, 42, rejected.stderr)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ENTITIES = ("client", "orchestrator", "maps", "files")
+ENTITIES = ("client", "orchestrator", "maps")
 
 
 def helper(entity):

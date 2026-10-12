@@ -1,5 +1,6 @@
-"""Real local tools and LangGraphs; fake model/RPC, no keys or network."""
+"""Real local tools and LangGraphs; fake model/HTTP, no keys or network."""
 import asyncio
+import ast
 import importlib.util
 import json
 import os
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from fastapi.testclient import TestClient
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -156,54 +158,59 @@ def test_orchestrator_dispatches_files_and_remembers_answer(tmp_path):
     asyncio.run(run())
 
 
-def test_files_native_handler_returns_answer_and_canonical_errors(monkeypatch, tmp_path):
+def test_files_app_is_plain_http_and_cli_owns_mesh_bootstrap():
+    source = (ROOT / "files/app.py").read_text()
+    tree = ast.parse(source)
+    assert not any(
+        isinstance(node, ast.Import)
+        and any(alias.name == "cynapsa" or alias.name.startswith("cynapsa.") for alias in node.names)
+        or isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and (node.module == "cynapsa" or node.module.startswith("cynapsa."))
+        for node in ast.walk(tree)
+    )
+    assert '@app.post("/files")' in source
+    assert "cynapsa run" in (ROOT / "files/entrypoint.sh").read_text()
+    assert "uvicorn app:app" in (ROOT / "files/entrypoint.sh").read_text()
+
+
+def test_files_http_route_returns_answer_and_http_errors(monkeypatch, tmp_path):
     (tmp_path / "people.txt").write_text("Guy lives at 12 Park Drive.")
     model = SimpleNamespace(complete=Mock(side_effect=[
         {"tool_calls": [call("search_files", {"query": "Guy"})]},
         {"content": "12 Park Drive (people.txt:1)"},
     ]), close=Mock())
 
-    class RPCException(Exception):
-        def __init__(self, status_code, *, code, detail):
-            super().__init__(detail)
-            self.status_code, self.code = status_code, code
-
-    class Session:
-        agent_id = "files@example.test"
-        def __enter__(self):
-            return self
-        def __exit__(self, *_):
-            return None
-        def on(self, path):
-            assert path == "*"
-            def register(handler):
-                self.handler = handler
-                return handler
-            return register
-
-    session = Session()
-    from contextlib import nullcontext
-    monkeypatch.setitem(sys.modules, "cynapsa", SimpleNamespace(
-        connect=Mock(return_value=session), RPCException=RPCException))
-    monkeypatch.setitem(sys.modules, "runtime", SimpleNamespace(
-        prepare_runtime=lambda: None, connection_options=lambda **_: {},
-        litellm_key=lambda: "test-key"))
-    monkeypatch.setitem(sys.modules, "llm", SimpleNamespace(
-        ModelClient=lambda *_, **__: model, ModelError=type("ModelError", (Exception,), {})))
-    monkeypatch.setitem(sys.modules, "connection_alerts", SimpleNamespace(
-        watch_connection=lambda *_: nullcontext()))
-    monkeypatch.setitem(sys.modules, "tools", tools)
-    monkeypatch.setitem(sys.modules, "workflow", workflow)
+    for name in ("llm", "runtime", "tools", "workflow"):
+        module = load(f"demo_files_http_{name}", f"files/{name}.py")
+        monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setenv("DEMO_FILES_DIRECTORY", str(tmp_path))
-    monkeypatch.setattr(sys, "argv", ["app.py"])
-    monkeypatch.setitem(sys.modules, "rpc_logging", load("demo_files_logging", "files/rpc_logging.py"))
-    app = load("demo_files_native_app", "files/app.py")
-    monkeypatch.setattr(app, "threading", SimpleNamespace(Event=lambda: SimpleNamespace(wait=lambda: None)))
-    app.main()
-    result = session.handler(SimpleNamespace(json=lambda: {"question": "Guy's address?"}))
-    assert "12 Park Drive" in result["answer"]
-    with pytest.raises(RPCException) as failure:
-        session.handler(SimpleNamespace(json=lambda: {"question": ""}))
-    assert failure.value.status_code == 400
-    assert failure.value.code == "bad_request"
+    app = load("demo_files_http_app", "files/app.py")
+    monkeypatch.setattr(app, "ModelClient", lambda *_, **__: model)
+    monkeypatch.setattr(app, "litellm_key", lambda: "test-key")
+    with TestClient(app.app) as client:
+        response = client.post("/files", json={"question": "Guy's address?"})
+        assert response.status_code == 200
+        assert "12 Park Drive" in response.json()["answer"]
+        assert client.get("/files").status_code == 405
+        assert client.post("/other", json={"question": "hello"}).status_code == 404
+        for body in ({"question": ""}, {"question": 7}, [], {}):
+            assert client.post("/files", json=body).status_code == 400
+        assert client.post("/files", content=b"not-json").status_code == 400
+
+        def model_failure(*_):
+            raise app.ModelError(429)
+
+        monkeypatch.setattr(app, "answer_question", model_failure)
+        unavailable = client.post("/files", json={"question": "Guy?"})
+        assert unavailable.status_code == 503
+        assert "test-key" not in unavailable.text
+
+        def unexpected_failure(*_):
+            raise RuntimeError("private model details")
+
+        monkeypatch.setattr(app, "answer_question", unexpected_failure)
+        failed = client.post("/files", json={"question": "Guy?"})
+        assert failed.status_code == 502
+        assert "private model details" not in failed.text
     model.close.assert_called_once()

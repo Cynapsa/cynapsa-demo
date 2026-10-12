@@ -1,6 +1,8 @@
 # Files agent
 
-A standalone native Cynapsa identity with a local LangGraph. It answers questions
+An ordinary FastAPI HTTP app with a local LangGraph. It imports no Cynapsa SDK:
+the container starts it with `cynapsa run`, which owns mesh login and routes
+incoming Cynapsa RPCs to `POST /files`. It answers questions
 from UTF-8 `.txt`, `.md`, `.csv`, and `.json` documents in one directory. It does
 not need Google Maps or a vector database. Other agents can run on other machines.
 
@@ -26,7 +28,7 @@ Required configuration:
 - `LITELLM_API_KEY`: the model gateway key, or an OpenAI key when using OpenAI
   directly. Alternatively use `.private/litellm_api_key` with mode `0600`.
 - `LITELLM_BASE_URL`, `LITELLM_MODEL`: defaults are
-  `https://litellm.eladrave.com` and `gpt-5.6-terra-high`. For direct OpenAI use
+  `https://litellm.eladrave.com` and `chatgpt/gpt-5.6-terra-high`. For direct OpenAI use
   `https://api.openai.com/v1` and a model available to your account.
 
 The runner mounts the host directory at `/data` **read-only** and overrides the
@@ -35,7 +37,9 @@ container's `DEMO_FILES_DIRECTORY` accordingly. The non-root container user
 permissions on unrelated private documents. Mount only a dedicated database.
 Documents are not copied into the image or Cynapsa state volume.
 
-On startup, copy the printed bare agent JID into the orchestrator's `.env`:
+Get this identity's full bare agent JID from the portal's agent identity page
+and copy it into the orchestrator's `.env`. The HTTP app itself cannot inspect
+or print the Cynapsa identity:
 
 ```dotenv
 DEMO_FILES_AGENT_ID=your-files-agent@connect.cynapsa.com
@@ -48,12 +52,19 @@ Rebuild/restart the orchestrator and client after updating their application cod
 ```
 
 Start maps and files before the orchestrator, then start the client. Ask
-“What is Guy's home address?” The orchestrator calls `ask_files_agent` over native
-Cynapsa RPC `/files`; no inter-agent HTTP link or shared graph is used. The files
-agent accepts `{"question": "..."}` on its wildcard endpoint, and returns
+“What is Guy's home address?” The orchestrator calls `ask_files_agent` over
+Cynapsa RPC `/files`; the SDK normalizes its JSON request to HTTP POST and the
+CLI's FastAPI hook invokes this app without an inter-agent HTTP socket. The
+files app accepts `{"question": "..."}` at exactly `POST /files`, and returns
 `answer`, verified tool-output `sources` (relative filenames and lines/excerpts),
 and `attribution`. The client prints file citations. Documents are data, never
-instructions. Not-found is a successful answer, not a transport error.
+instructions. Not-found is a successful answer, not a transport error. Invalid
+questions return HTTP 400, model unavailability 503, and unexpected handler
+failures a sanitized 502.
+
+The Uvicorn listener binds only `127.0.0.1:8000` inside the container. No host
+port is published. FastAPI startup prints `demo-files HTTP app ready on /files`;
+this means the app is running, not that a particular remote peer can reach it.
 
 ## Tools and limits
 
@@ -88,8 +99,10 @@ text in its local SQLite volume. Every authorized mesh caller of this agent can
 ask about its mounted documents; there is no per-document/user access control.
 Never point this agent at your whole home directory or a secret store.
 
-The entity directory is independent: its Dockerfile builds SDK/Core from GitHub
-`main`, and includes them in the resulting image. No sibling files are required.
+The entity directory is independent: its Dockerfile
+builds SDK/Core from GitHub `main`, and includes them in the
+resulting image. Local unpushed SDK/Core changes are not in the image. No
+sibling files are required.
 Read `SOURCE_DEPENDENCIES.md` for provenance. `./run.sh --build` refreshes the
 image; `./run.sh --force-enroll` uses the genuine SDK CLI in the same state volume.
 Default volume: `cynapsa-demo-files-state`; override with
@@ -99,10 +112,10 @@ in its volume. Real `.env`, keys, and documents must not be committed.
 
 ## Traffic logs
 
-The app logs full incoming Cynapsa request bodies and handler return values,
-including file excerpts returned to callers, with the peer's full ID. Set
-`DEMO_ORCHESTRATOR_AGENT_ID` to label that incoming peer as `orchestrator`.
-There is no redaction or truncation, so use only non-sensitive demo files.
-Headers are not logged. LLM HTTP access logs are quiet; warnings/errors and
-connection alerts remain. A handler return precedes SDK validation/transmission
-and is not a delivery receipt. Rebuild with `./run.sh --build`.
+The plain HTTP app logs the question and response content, including file
+excerpts, without redaction or truncation. Use only non-sensitive demo files.
+It does not receive authenticated peer-ID metadata through the ASGI interface,
+so it does not label the sender. Headers are not logged. Uvicorn access logs and
+successful LLM HTTP access logs are quiet; warnings and errors remain. Unlike
+the native demo entities, this app has no SDK event consumer or connection
+alerts. Rebuild with `./run.sh --build`.

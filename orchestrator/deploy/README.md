@@ -94,3 +94,12 @@ RPC timeout and a generic failed response. End-to-end delivery is therefore
 format without further investigation. Avoid repeating the live question until
 the duplicate arrivals/timeout are understood, since they invoke the model and
 Places API repeatedly.
+
+## 2026-10-11 model correction
+
+Revision `demo-orchestrator:4` retains the digest-pinned image and changes
+`LITELLM_MODEL` to `chatgpt/gpt-5.6-terra-high`. The previous unprefixed model
+name produced HTTP 400 from the model gateway; a direct request using the
+prefixed name returned HTTP 200. The ECS service was restarted at desired count
+one. Its new task reached `RUNNING` and logged a ready Cynapsa session with
+available mesh connectivity. No live client RPC was performed for this rollout.

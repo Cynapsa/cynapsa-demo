@@ -23,7 +23,7 @@ def main() -> int:
         print("LITELLM_BASE_URL must be an HTTPS URL without embedded credentials.", file=sys.stderr)
         return 2
     endpoint = base + ("/chat/completions" if base.endswith("/v1") else "/v1/chat/completions")
-    model = os.environ.get("LITELLM_MODEL", "gpt-5.6-terra-high")
+    model = os.environ.get("LITELLM_MODEL", "chatgpt/gpt-5.6-terra-high")
     key_file = os.environ.get("LITELLM_API_KEY_FILE")
     key = Path(key_file).read_text(encoding="utf-8").strip() if key_file else os.environ.get("LITELLM_API_KEY", "")
     if not key:

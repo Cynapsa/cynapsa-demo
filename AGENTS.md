@@ -25,8 +25,8 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
 Every directory is independently runnable. Its `run.sh` builds a local
 container image from that directory when the image is not already available.
 The directory includes its own application, Docker build, and runtime scripts.
-During each image build on this temporary demo branch, it fetches the `bridge-adaptation` branches of the
-Python SDK and Go Core from GitHub using `CYNAPSA_GITHUB_TOKEN` as a BuildKit
+During each image build, it fetches the `main` branches of the Python SDK and
+Go Core from GitHub using `CYNAPSA_GITHUB_TOKEN` as a BuildKit
 secret. Put that token in the entity's ignored `.env`; it needs read access to
 both repositories and is never passed to the running container. Enrollment
 tokens and installation state are supplied at runtime and are not part of the image.

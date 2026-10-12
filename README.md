@@ -76,8 +76,8 @@ container entirely from that directory when its local image is missing. No
 credentials, enrollment tokens, or Cynapsa installation profiles are committed
 to this repository.
 
-On this temporary branch, each build fetches the `bridge-adaptation` branches of the SDK and
-Go Core directly from GitHub. These builds
+Each build fetches the `main` branches of the SDK and Go Core directly from
+GitHub. These builds
 require an ejabberd authority with the matching peer-handshake protocol; they
 are not compatible with a server still running the old snapshot protocol.
 
@@ -93,7 +93,7 @@ Clone the repository, enter the identity directory, and create its ignored
 environment file. For example, to run the client:
 
 ```sh
-git clone --branch bridge-adaptation https://github.com/Cynapsa/cynapsa-demo.git
+git clone --branch main https://github.com/Cynapsa/cynapsa-demo.git
 cd cynapsa-demo/client
 cp .env.example .env
 # Edit .env and replace the placeholders.
@@ -165,7 +165,7 @@ overwriting the first one. Each identity's README contains an example.
 
 ## Rebuilds
 
-Use `./run.sh --build` to fetch fresh `bridge-adaptation` branch heads and
+Use `./run.sh --build` to fetch fresh `main` branch heads and
 rebuild. `CYNAPSA_DEMO_PLATFORM` remains available for an explicit Docker
 target platform. The default image tag distinguishes these GitHub-backed
 builds from old vendored images. If you set a custom image tag, run
@@ -174,7 +174,7 @@ image is missing.
 
 See each directory's `SOURCE_DEPENDENCIES.md` for build provenance and
 source-versus-local limits. A direct `./build.sh` defaults to a `:local` tag,
-whereas `run.sh` defaults to `:bridge-adaptation-<Docker-server-arch>`;
+whereas `run.sh` defaults to `:main-<Docker-server-arch>`;
 use `run.sh --build` or set the same image override when building separately.
 
 ## Runtime limits and errors

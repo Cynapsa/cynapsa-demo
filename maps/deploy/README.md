@@ -1,7 +1,7 @@
 # GCP Maps deployment
 
-Updated 2026-09-29: project `aztm-amesh`, region `us-central1`, worker pool
-`cynapsa-demo-maps`, one instance. Revision `cynapsa-demo-maps-00009-5hj`.
+Updated 2026-10-11: project `aztm-amesh`, region `us-central1`, worker pool
+`cynapsa-demo-maps`, one instance. Ready revision `cynapsa-demo-maps-00011-mxz`.
 
 Image:
 `us-central1-docker.pkg.dev/aztm-amesh/cynapsa-v2/cynapsa-demo-maps@sha256:baa453fa2581b8f98238bbbc9bca38d12c00a6f183b9f262341dd5af76a83e7f`.
@@ -16,7 +16,7 @@ Runtime Secret Manager references (no secret values in source/image):
 - `GOOGLE_MAPS_API_KEY`: `cynapsa-demo-google-maps-api-key:1`.
 
 Service account `cynapsa-demo-workers@aztm-amesh.iam.gserviceaccount.com`.
-Mesh `cynapsa_demo_cynapsa_demo`, model `gpt-5.6-terra-high`, gateway
+Mesh `cynapsa_demo_cynapsa_demo`, model `chatgpt/gpt-5.6-terra-high`, gateway
 `https://litellm.eladrave.com`. Gemini and old credential-seed bindings were
 removed from this revision; their secret resources were not deleted.
 `DEMO_ORCHESTRATOR_AGENT_ID` labels the authenticated incoming peer in simple
@@ -56,3 +56,10 @@ ready and reports available mesh connectivity. However, the client returned an
 authorization error; Maps logged repeated arrivals and handler returns, while
 the orchestrator later timed out waiting for Maps. The new end-to-end path is
 not yet verified. Repeating this test can invoke paid APIs multiple times.
+
+## 2026-10-11 model correction
+
+Revision `cynapsa-demo-maps-00011-mxz` changed only `LITELLM_MODEL` to
+`chatgpt/gpt-5.6-terra-high`; the image digest and other environment bindings
+were preserved. GCP reports this revision ready. The model prefix was verified
+against the gateway separately; no live Maps RPC was performed for this update.

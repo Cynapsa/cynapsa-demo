@@ -99,8 +99,8 @@ text in its local SQLite volume. Every authorized mesh caller of this agent can
 ask about its mounted documents; there is no per-document/user access control.
 Never point this agent at your whole home directory or a secret store.
 
-The entity directory is independent: on this temporary demo branch its Dockerfile
-builds SDK/Core from GitHub `bridge-adaptation`, and includes them in the
+The entity directory is independent: its Dockerfile
+builds SDK/Core from GitHub `main`, and includes them in the
 resulting image. Local unpushed SDK/Core changes are not in the image. No
 sibling files are required.
 Read `SOURCE_DEPENDENCIES.md` for provenance. `./run.sh --build` refreshes the

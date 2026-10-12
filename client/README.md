@@ -1,13 +1,11 @@
 # Demo client
 
-Console alerts observe the SDK event stream independently of request handling
-and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
-by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
-and canonical `core.error` details are also printed when emitted. A disconnect
-alone does not identify revocation; the app is not automatically terminated.
-The observer owns `next_event()` and stops before intentional session teardown.
-Rebuild with `./run.sh --build` after the updated demo and Core sources have
-been pushed; existing images do not gain these changes automatically.
+`app.py` is an ordinary Requests program. It sends JSON to
+`DEMO_ORCHESTRATOR_ORIGIN/ask` and imports no Cynapsa package. The container
+entrypoint runs it through `cynapsa run`, which maps that HTTP origin to the
+orchestrator's bare agent ID in RPC mode. The CLI owns login and the HTTP hook.
+The HTTP program does not consume SDK connection events; request failures
+remain visible at the prompt. Rebuild with `./run.sh --build` to get this code.
 
 This directory is an independently runnable interactive client for the local
 Cynapsa demo. Start the maps and orchestrator containers first; their GCP
@@ -49,19 +47,21 @@ precedence over the value in `.env`.
 ```
 
 `--force-enroll` needs a still-valid `CYNAPSA_TOKEN` in `.env` or the shell. It
-replaces the installation in the selected Docker volume using the fetched
-`cynapsa run --force-enroll` command. That CLI session closes before the
-native client opens its connection from the new profile.
-The fetched SDK includes force-enroll and native remote-error handling. After
-changing SDK/Core branches, rebuild with `./run.sh --build` and restart any
-running container; subsequent runs reuse the rebuilt image.
+replaces the installation in the selected Docker volume through the same
+`cynapsa run --force-enroll` process that runs the HTTP app. After changing
+SDK/Core branches, rebuild with `./run.sh --build` and restart any running
+container; subsequent runs reuse the rebuilt image.
 
-`DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` are required. This keeps the
-same image reusable for any mesh and orchestrator identity.
+`DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` are required by the launcher.
+The optional `DEMO_ORCHESTRATOR_ORIGIN` defaults to
+`http://demo-orchestrator.local`; it is both the URL used by the HTTP app and
+the origin mapped by the launcher. This keeps the same image reusable for any
+mesh and orchestrator identity.
 
 Use the complete canonical **bare** destination JID, not the friendly label or
 an installation `/r2...` address; the authority resolves the exact peer. The
-client prints canonical remote errors/native errors and continues prompting.
+client prints a generic failure for non-2xx responses or request errors and
+continues prompting. The orchestrator logs the detailed downstream error.
 No active target is unavailable, not automatic delivery to an offline mailbox.
 See [source dependencies](SOURCE_DEPENDENCIES.md) for remote-versus-local SDK
 changes; an unpushed local API removal is not in a GitHub image by assumption.
@@ -76,16 +76,16 @@ For chat-only output:
 
 On the first run after updating this code, rebuild with
 `./run.sh --build --quiet`. The Python app also accepts `python app.py --quiet`.
-Quiet mode hides Python logs, connection alerts and startup banners while
+Quiet mode hides Python logs and startup banners while
 keeping the input prompt, answers, citations, user-triggered `new` conversation
-IDs, and request failures. The SDK event observer still drains events silently.
+IDs, and request failures. The HTTP app has no SDK event observer.
 Successful build output is hidden; build/startup failures remain visible.
 It can be combined with `--force-enroll` without changing credentials or volumes.
 This is a demo-client option, not a new SDK/Core flag; other agents are unchanged.
 
-Without `--quiet`, the app logs the full `/ask` request and response content,
-the orchestrator's friendly name and full ID, or a request failure. There is no
+Without `--quiet`, the app logs the full `/ask` request and response content
+with the HTTP origin, or a request failure. There is no
 redaction or truncation; do not put sensitive prompts in this demo if logs will
 be shared. Headers are not logged. The answer also prints normally. HTTP access
-logs are quiet, but warnings/errors and connection alerts remain. Rebuild with
+logs are quiet, but warnings/errors remain. Rebuild with
 `./run.sh --build` to update the local image.

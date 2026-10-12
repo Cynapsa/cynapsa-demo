@@ -1,4 +1,4 @@
-"""Exercise actual demo handlers/client with fake Cynapsa sessions, no network."""
+"""Exercise demo handlers and the HTTP client without external network calls."""
 
 from __future__ import annotations
 
@@ -15,13 +15,14 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import requests
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def load(name, path, monkeypatch):
-    if path.name == "app.py":
+    if path.name == "app.py" and path.parent.name != "client":
         load("rpc_logging", path.parent / "rpc_logging.py", monkeypatch)
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -219,70 +220,47 @@ def test_orchestrator_storage_startup_failure_never_opens_session(monkeypatch, t
 
 @pytest.mark.parametrize("quiet", [False, True])
 def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys, caplog, quiet):
-    # The actual client runs once per process; isolate its logging.disable here.
+    # The HTTP program runs once per process; isolate its logging.disable here.
     previous_disable = logging.root.manager.disable
     caplog.set_level(logging.INFO)
-    sdk = sdk_stub(monkeypatch)
-
-    class Session:
-        agent_id = "client@example.test"
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return None
-
-        def next_event(self, timeout):
-            threading.Event().wait(timeout)
-            raise queue.Empty
-
-    session = Session()
-    session.request = Mock(return_value=SimpleNamespace(
-        status_code=200, json=lambda: {"answer": "ok", "maps": None},
-    ))
-    sdk.connect = Mock(return_value=session)
-    monkeypatch.setitem(sys.modules, "runtime", SimpleNamespace(
-        prepare_runtime=lambda: None, connection_options=lambda **_: {},
-        orchestrator_agent_id=lambda: "orchestrator@example.test",
-    ))
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b'{"answer":"ok","maps":null}'
+    response.url = "http://demo-orchestrator.local/ask"
+    post = Mock(return_value=response)
+    monkeypatch.setattr(requests, "post", post)
     monkeypatch.setenv("DEMO_CONVERSATION_ID", "resumed-chat")
     monkeypatch.setattr(sys, "argv", ["app.py"] + (["--quiet"] if quiet else []))
     inputs = iter(["first", "follow up", "new", "fresh question", "quit"])
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-    load("connection_alerts", ROOT / "client/connection_alerts.py", monkeypatch)
     app = load("demo_client_adapter", ROOT / "client/app.py", monkeypatch)
     try:
         app.main()
     finally:
         logging.disable(previous_disable)
-    bodies = [call.args[1] for call in session.request.call_args_list]
+    bodies = [call.kwargs["json"] for call in post.call_args_list]
     assert bodies[0]["conversation_id"] == bodies[1]["conversation_id"] == "resumed-chat"
     assert bodies[2]["conversation_id"] != "resumed-chat"
+    assert all(call.args == ("http://demo-orchestrator.local/ask",)
+               and call.kwargs["timeout"] == 140 for call in post.call_args_list)
     output = capsys.readouterr().out
     assert ("Conversation: resumed-chat" in output) is not quiet
-    assert ("demo-client ready as" in output) is not quiet
+    assert ("demo-client ready" in output) is not quiet
     assert "ok" in output
-    assert ("request sent to" in caplog.text) is not quiet
+    assert ("HTTP request sent to orchestrator" in caplog.text) is not quiet
 
 
 def test_quiet_client_keeps_prompts_answers_and_failures(monkeypatch, capsys, caplog):
-    sdk = sdk_stub(monkeypatch)
-    from contextlib import nullcontext
-    session = SimpleNamespace(
-        request=Mock(side_effect=[
-            sdk.NativeError("request denied"),
-            SimpleNamespace(status_code=404, error=SimpleNamespace(code="not_found", detail="Missing endpoint")),
-            SimpleNamespace(status_code=200, json=lambda: {"answer": "Chat answer", "maps": None}),
-        ]),
-    )
-    sdk.connect = Mock(return_value=nullcontext(session))
-    monkeypatch.setitem(sys.modules, "runtime", SimpleNamespace(
-        prepare_runtime=lambda: None, connection_options=lambda **_: {},
-        orchestrator_agent_id=lambda: "orchestrator@example.test",
-    ))
-    watch = Mock(return_value=nullcontext())
-    monkeypatch.setitem(sys.modules, "connection_alerts", SimpleNamespace(watch_connection=watch))
+    denied = requests.Response()
+    denied.status_code = 404
+    denied._content = b'{"detail":"Missing endpoint"}'
+    denied.url = "http://demo-orchestrator.local/ask"
+    answered = requests.Response()
+    answered.status_code = 200
+    answered._content = b'{"answer":"Chat answer","maps":null}'
+    answered.url = denied.url
+    post = Mock(side_effect=[requests.ConnectionError("request denied"), denied, answered])
+    monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(sys, "argv", ["app.py", "--quiet"])
     inputs = iter(["one", "two", "three", "quit"])
 
@@ -300,9 +278,8 @@ def test_quiet_client_keeps_prompts_answers_and_failures(monkeypatch, capsys, ca
         logging.disable(previous_disable)
     output = capsys.readouterr().out
     assert 'Ask a question (or "quit"):' in output
-    assert "Request failed: request denied" in output
-    assert "Request failed (404 not_found): Missing endpoint" in output
+    assert output.count("Request failed: The demo could not answer") == 2
     assert "Chat answer" in output
     assert "ready as" not in output and "Conversation:" not in output
     assert "CYNAPSA" not in caplog.text and "Hidden diagnostic" not in caplog.text
-    watch.assert_called_once_with(session, "demo-client", quiet=True)
+    assert post.call_count == 3

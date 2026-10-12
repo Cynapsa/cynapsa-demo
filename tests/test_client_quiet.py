@@ -1,4 +1,5 @@
-"""Shell wiring tests use fake Docker/Python, never real profiles or keys."""
+"""HTTP client and launcher checks use fakes, never real profiles or keys."""
+import ast
 import os
 import subprocess
 from pathlib import Path
@@ -8,13 +9,33 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_client_app_has_no_cynapsa_import_or_native_session() -> None:
+    source = (ROOT / "client/app.py").read_text()
+    tree = ast.parse(source)
+    imports = {
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imports.update(
+        node.module.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    )
+    assert "requests" in imports
+    assert imports.isdisjoint({"cynapsa", "runtime", "connection_alerts", "rpc_logging"})
+    assert "cynapsa.connect" not in source
+    assert "requests.post" in source
+
+
 @pytest.mark.parametrize("enrollment", ["cached", "fresh", "force"])
-def test_entrypoint_forwards_quiet_in_all_login_paths(tmp_path, enrollment):
+@pytest.mark.parametrize("origin", [None, "https://orchestrator.example.test"])
+def test_entrypoint_forwards_quiet_in_all_login_paths(tmp_path, enrollment, origin):
     log = tmp_path / "calls"
-    for command in ("python", "cynapsa"):
-        script = tmp_path / command
-        script.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\n')
-        script.chmod(0o755)
+    cli = tmp_path / "cynapsa"
+    cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\n')
+    cli.chmod(0o755)
     state = tmp_path / "state"
     state.mkdir()
     if enrollment != "fresh":
@@ -24,15 +45,23 @@ def test_entrypoint_forwards_quiet_in_all_login_paths(tmp_path, enrollment):
            "DEMO_PRIVATE_DIRECTORY": str(tmp_path / "private"),
            "DEMO_SECRET_SOURCE_DIRECTORY": str(tmp_path / "secrets"),
            "DEMO_CLIENT_QUIET": "1", "CYNAPSA_TOKEN": "test-only-token",
-           "DEMO_MESH_ID": "test-mesh", "DEMO_FORCE_ENROLL": "1" if enrollment == "force" else ""}
+           "DEMO_MESH_ID": "test-mesh", "DEMO_ORCHESTRATOR_AGENT_ID": "orchestrator@example.test",
+           "DEMO_FORCE_ENROLL": "1" if enrollment == "force" else ""}
+    env.pop("DEMO_ORCHESTRATOR_ORIGIN", None)
+    if origin is not None:
+        env["DEMO_ORCHESTRATOR_ORIGIN"] = origin
     result = subprocess.run(["/bin/sh", str(ROOT / "client/entrypoint.sh")], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     commands = log.read_text().splitlines()
-    assert commands[-1] == "/app/app.py" + (" --enroll" if enrollment == "fresh" else "") + " --quiet"
-    if enrollment == "force":
-        assert commands[0].startswith("run --mesh-id test-mesh")
-        assert "--force-enroll" in commands[0]
+    assert len(commands) == 1
+    assert commands[0].startswith("run --mesh-id test-mesh --profile-id demo-client ")
+    assert f"--map {origin or 'http://demo-orchestrator.local'} orchestrator@example.test rpc" in commands[0]
+    assert "--rpc-timeout-ms 140000" in commands[0]
+    assert commands[0].endswith("-- python /app/app.py --quiet")
+    assert ("--token-file" in commands[0]) is (enrollment != "cached")
+    assert ("--force-enroll" in commands[0]) is (enrollment == "force")
+    assert "test-only-token" not in commands[0]
 
 
 @pytest.mark.parametrize("build_failure", [False, True])

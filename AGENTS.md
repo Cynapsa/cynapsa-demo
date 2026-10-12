@@ -169,6 +169,7 @@ CYNAPSA_TOKEN=replace-with-client-enrollment-token
 CYNAPSA_GITHUB_TOKEN=replace-with-github-token
 DEMO_MESH_ID=replace-with-mesh-id
 DEMO_ORCHESTRATOR_AGENT_ID=agent-id@connect.cynapsa.com
+DEMO_ORCHESTRATOR_ORIGIN=http://demo-orchestrator.local
 ```
 
 Start the client:
@@ -177,10 +178,10 @@ Start the client:
 ./run.sh
 ```
 
-Successful startup prints the client identity and an interactive prompt:
+Successful CLI login starts the HTTP app and prints an interactive prompt:
 
 ```text
-demo-client ready as <agent-id>@connect.cynapsa.com
+demo-client ready
 Ask a question (or "quit"):
 ```
 
@@ -189,12 +190,12 @@ client. After successful enrollment, remove `CYNAPSA_TOKEN` from `.env`.
 
 Default state volume: `cynapsa-demo-client-state`.
 
-Client-only `./run.sh --quiet` hides Python diagnostic logs, connection alerts
-and startup banners; input, answers/citations, request failures and explicit
-`new` conversation IDs remain. `python app.py --quiet` is the native equivalent.
-The runner forwards this through the entrypoint for cached, fresh and forced
-enrollment. The observer still drains SDK events without printing; no extra
-consumer is added. Successful build progress is captured privately and removed,
+Client-only `./run.sh --quiet` hides Python diagnostic logs and startup banners;
+input, answers/citations, request failures and explicit `new` conversation IDs
+remain. `python app.py --quiet` is the direct HTTP equivalent. The runner
+forwards this through the CLI launcher for cached, fresh and forced enrollment.
+The HTTP app has no SDK event consumer. Successful build progress is captured
+privately and removed,
 while failed builds are reported and stop startup. Existing images must first
 be rebuilt with `./run.sh --build --quiet`. Normal server logs are unaffected.
 
@@ -222,12 +223,12 @@ Fetch the current SDK and Go Core branch heads and rebuild:
 After an identity has been removed from its mesh and re-added, place its
 still-valid enrollment token in that directory's `.env` and run
 `./run.sh --force-enroll`. The entrypoint invokes the built-in
-`cynapsa run --force-enroll` with the token from a private file and a no-op
-target. After that CLI session closes, it starts the native agent from the
-new saved profile in the same Docker volume; it does not switch volumes. Stop
+`cynapsa run --force-enroll` with the token from a private file. For the client
+and files agent, the CLI then runs the HTTP program within that session; the
+native agents retain their own startup path. No launcher switches volumes. Stop
 the old container first. If a grant expired or was revoked independently,
 obtain a new grant.
-The fetched SDK includes force-enroll and native remote-error handling.
+The fetched SDK includes force-enroll and mapped HTTP error handling.
 After the SDK/Core branch changes, use `./run.sh --build` and restart
 any running container; an existing container keeps its original image.
 
@@ -267,9 +268,9 @@ an active enrollment grant with capacity for a new installation.
 
 ## Expected failure signals
 
-The three native entities own one SDK `next_event()` consumer for console alerts.
-It runs in a background thread in maps/client and an async task in the
-orchestrator, separately from handlers and user input. Do not add another
+The two native agents own one SDK `next_event()` consumer for console alerts.
+It runs in a background thread in Maps and an async task in the orchestrator,
+separately from handlers and user input. Do not add another
 competing `next_event()` consumer without event fan-out.
 Connectivity and SDK lifecycle transitions print an `ALERT`; canonical
 `core.error` events print their real code, stage, retryability, source and
@@ -279,12 +280,13 @@ Observers stop before intentional session teardown; disconnects do not
 automatically terminate these application processes.
 Alerts are best-effort observations on bounded SDK queues, not a durable
 audit log or an authorization/keepalive mechanism.
-The three native directories own identical `rpc_logging.py` helpers. Main
+The two native directories own identical `rpc_logging.py` helpers. Main
 configures external HTTP libraries at WARNING, retaining error diagnostics.
 Native outgoing calls use `request_sync`/`request_async`; handlers apply
 `@log_handler` underneath `@session.on`, preserving async classification.
-The files directory is a plain HTTP app and has no SDK event consumer or
-peer-ID traffic log; it logs its question and response body through FastAPI.
+The client and files directories are plain HTTP apps and have no SDK event
+consumer. The client logs its virtual URL, question and HTTP response; files
+logs its question and response body through FastAPI.
 Traffic INFO records are simple request/response lines with full message
 content (no redaction or truncation); headers are not logged. Keep sensitive
 data out of demo requests because cloud logs retain it. Friendly peer names
@@ -295,8 +297,8 @@ environment variables; unknown peers show their full ID. Set
 sent` means SDK submission, not delivery; `response returned` precedes SDK
 validation/transmission. MSG logs only the incoming request. Failures re-raise
 the original exception.
-No additional `next_event()` consumer is created. The helpers must stay identical
-while every directory stays independently runnable. Rebuild and redeploy to
+No additional `next_event()` consumer is created. The native helpers must stay
+identical while every directory stays independently runnable. Rebuild and redeploy to
 change cloud logging; source edits never modify an existing container.
 The Core connectivity-event producer must be included in the fetched Core
 revision before a GitHub-built image can show live connection transitions.
@@ -330,7 +332,7 @@ That loop owns the shared graph and saver and must remain running until async
 session teardown completes. Synchronous handlers remain on worker threads.
 Do not create a new loop per request around these shared async resources.
 These local application checkpoints are unrelated to removed mesh snapshots.
-The client prints an ID, accepts `new`, and uses optional
+The client prints a conversation ID, accepts `new`, and uses optional
 `DEMO_CONVERSATION_ID` to resume a chat after restart. Read each entity's README
 for the memory contract. No extra server endpoint or direct HTTP link is added.
 
@@ -348,7 +350,7 @@ input, timeout and model failures are 400/504/503 respectively; downstream
 native/remote failures become generic 502 `orchestrator_failed`. Its terminal
 logs include canonical downstream details and traces; keep them private.
 
-Source: entity `app.py`, `llm.py`, `runtime.py`, and `maps/places.py`. Model and
+Source: entity `app.py`, agent `llm.py` and `runtime.py`, and `maps/places.py`. Model and
 Places HTTP timeouts (25/10 seconds) are not a total request deadline. Maps RPC
 TTL is 100,000 ms, client `/ask` TTL 140,000 ms, and session RPC timeout option
 110,000 ms; these distinct limits do not prove every allowed tool chain finishes.

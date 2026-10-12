@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLES = ("client", "maps", "orchestrator", "files")
-NATIVE_ROLES = ("client", "maps", "orchestrator")
+NATIVE_ROLES = ("maps", "orchestrator")
 
 
 class ForceEnrollTests(unittest.TestCase):

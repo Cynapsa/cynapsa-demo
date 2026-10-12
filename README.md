@@ -1,10 +1,11 @@
 # Cynapsa Demo
 
-The three native entities log simple Cynapsa traffic lines at INFO under
-`demo.cynapsa`:
+The native orchestrator and Maps agent log Cynapsa traffic at INFO under
+`demo.cynapsa`; the plain HTTP client logs its virtual URL and request body
+under `demo.http`:
 
 ```text
-[client] request sent to orchestrator (agent-id@connect.cynapsa.com) /ask: {"prompt": "Find a cafe"}
+[client] HTTP request sent to orchestrator http://demo-orchestrator.local/ask: {"prompt": "Find a cafe"}
 [orchestrator] request received from client (agent-id@connect.cynapsa.com) /ask: {"prompt": "Find a cafe"}
 [orchestrator] response returned to client (agent-id@connect.cynapsa.com) /ask: {"answer": "..."}
 ```
@@ -24,17 +25,18 @@ wrappers do not change request arguments, results or exceptions.
 
 External HTTP access logs (`httpx`, `httpcore`, `urllib3`, `requests`) are reduced
 to WARNING, so successful model/Places calls no longer print `HTTP Request:`.
-Warnings, errors, and private application diagnostics remain. The three native
-entities also retain their SDK connection alerts.
+Warnings, errors, and private application diagnostics remain. The two native
+agents retain their SDK connection alerts. The HTTP client does not consume
+SDK events.
 Rebuild/restart local images with `./run.sh --build` to apply code changes;
 existing cloud images require a separate build and deployment.
 The interactive client additionally supports `./run.sh --quiet` (or
-`python app.py --quiet`): no logs, connection alerts or startup banners, but
+`python app.py --quiet`): no logs or startup banners, but
 chat prompts, answers, citations and request failures remain. On an existing
 installation, use `./run.sh --build --quiet` once to rebuild updated code.
 Successful build progress is hidden; build/startup failures remain visible.
 
-For the native entities, console alerts observe the SDK event stream independently of request handling
+For the native agents, console alerts observe the SDK event stream independently of request handling
 and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
 by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
 and canonical `core.error` details are also printed when emitted. A disconnect
@@ -45,7 +47,7 @@ been pushed; existing images do not gain these changes automatically.
 
 This repository contains four independent agent identities:
 
-- [`client/`](client/) — an interactive laptop client.
+- [`client/`](client/) — an ordinary interactive Requests client; the CLI maps its HTTP origin to Cynapsa.
 - [`orchestrator/`](orchestrator/) — LangGraph reasoning with persistent conversation memory and a remote Maps tool.
 - [`maps/`](maps/) — an independent LangGraph using the LiteLLM gateway and Google Places.
 - [`files/`](files/) — a plain FastAPI/LangGraph app searching a read-only local document directory; the CLI supplies Cynapsa login and routing.
@@ -62,7 +64,8 @@ client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
 ```
 
 Each server runs its own local graph and can live on a different machine.
-The only inter-agent connection is native Cynapsa RPC. The orchestrator
+Inter-agent transport is Cynapsa RPC; the client reaches it through a mapped
+HTTP call. The orchestrator
 checkpoints conversations in SQLite inside its existing state volume;
 it sends relevant context in a self-contained Maps question, not shared graph
 state. The client prints a conversation ID; `new` starts a fresh chat and
@@ -196,8 +199,9 @@ The client `/ask` TTL remains 140 seconds; slow chains can exceed it.
 HTTP client timeouts are 25 seconds for the model
 and 10 seconds for Places, not whole-request wall-clock guarantees.
 
-The client prints canonical remote response errors or native/safety errors and
-continues its prompt. Orchestrator validation, timeout, and model failures have
+The HTTP client prints a generic failure for non-2xx responses or request
+errors and continues its prompt. The orchestrator retains detailed errors in
+its own terminal. Orchestrator validation, timeout, and model failures have
 distinct public 400/504/503 codes; downstream native/canonical remote and other
 internal failures become generic 502 `orchestrator_failed`. Its terminal logs
 retain downstream status/details and exception traces: treat them as private,

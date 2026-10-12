@@ -1,13 +1,10 @@
 # Run the Cynapsa demo client
 
-The client runs on your laptop and communicates with locally running maps and
-orchestrator agents over Cynapsa. Start those two containers first; their GCP
-worker pools were previously observed at zero instances, not checked for this
-audit. You need Docker and a Cynapsa
-enrollment token. The
-application and Docker build live in this directory. The Python SDK and Go
-Core are fetched from their `main` GitHub branches during the
-image build.
+The client runs on your laptop and reaches the orchestrator over Cynapsa.
+The orchestrator and maps agents must already be running, whether locally or
+remotely. You need Docker and a Cynapsa enrollment token. The application and
+Docker build live in this directory. The Python SDK and Go Core are fetched
+from their `main` GitHub branches during the image build.
 
 ## Requirements
 
@@ -51,7 +48,9 @@ CYNAPSA_TOKEN='your-enrollment-token' ./run.sh
 ```
 
 The script builds the client image from this directory, enrolls once, and
-saves the encrypted installation profile in the
+runs an ordinary Requests program through the CLI-installed HTTP mapping.
+The app itself imports no Cynapsa package. The CLI saves the encrypted
+installation profile in the
 `cynapsa-demo-client-state` Docker volume. Remove `CYNAPSA_TOKEN` from `.env`
 after enrollment.
 
@@ -75,7 +74,7 @@ Changing the ID starts a different chat; it does not erase earlier history.
 
 ## Later runs
 
-For prompts and answers without diagnostic logs, alerts or startup banners:
+For prompts and answers without diagnostic logs or startup banners:
 
 ```sh
 ./run.sh --quiet
@@ -86,7 +85,8 @@ Rebuild once after updating to this implementation with
 successful build output is hidden. Normal runs without `--quiet` retain logs.
 Use `./run.sh --force-enroll --quiet` if a replacement enrollment is required.
 For direct Python execution, the equivalent option is `python app.py --quiet`.
-Quiet mode still drains SDK events and preserves chat citations and `new`.
+The HTTP app has no SDK event observer. Quiet mode preserves chat citations
+and `new`.
 
 ```sh
 cd /path/to/cynapsa-demo/client
@@ -96,7 +96,7 @@ cd /path/to/cynapsa-demo/client
 If this client's installation was revoked when its agent was removed from the
 mesh, re-add the agent, supply a still-valid token, and run
 `./run.sh --force-enroll`. This runs `cynapsa run --force-enroll` against the
-same Docker volume, then starts the native client from the replaced profile.
+same Docker volume and starts the HTTP program within that CLI session.
 Later ordinary runs use
 the same volume. Use `./run.sh --build` to fetch newer branch commits;
 ordinary retries reuse the existing image.

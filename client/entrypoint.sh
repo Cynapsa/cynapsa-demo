@@ -4,10 +4,8 @@ set -eu
 state_directory=${CYNAPSA_STATE_DIRECTORY:-/var/lib/cynapsa}
 private_directory=${DEMO_PRIVATE_DIRECTORY:-/tmp/cynapsa-private}
 secret_source=${DEMO_SECRET_SOURCE_DIRECTORY:-/run/secrets}
-set --
-if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
-  set -- --quiet
-fi
+origin=${DEMO_ORCHESTRATOR_ORIGIN:-http://demo-orchestrator.local}
+: "${DEMO_ORCHESTRATOR_AGENT_ID:?DEMO_ORCHESTRATOR_AGENT_ID is required}"
 
 mkdir -p "$state_directory" "$private_directory"
 chmod 700 "$state_directory" "$private_directory"
@@ -20,6 +18,9 @@ for profile_path in "$state_directory"/profile-v2-*.state; do
   fi
 done
 
+set -- cynapsa run --mesh-id "${DEMO_MESH_ID:?DEMO_MESH_ID is required}" \
+  --profile-id demo-client --map "$origin" "$DEMO_ORCHESTRATOR_AGENT_ID" rpc \
+  --rpc-timeout-ms 140000
 if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   if [ -n "${CYNAPSA_TOKEN:-}" ]; then
     printf '%s' "$CYNAPSA_TOKEN" > "$private_directory/enrollment_token"
@@ -31,15 +32,14 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   fi
   chmod 600 "$private_directory/enrollment_token"
   unset CYNAPSA_TOKEN
+  set -- "$@" --token-file "$private_directory/enrollment_token"
   if [ "${DEMO_FORCE_ENROLL:-}" = 1 ]; then
-    cynapsa run --mesh-id "$DEMO_MESH_ID" --profile-id demo-client \
-      --token-file "$private_directory/enrollment_token" --force-enroll \
-      -- python /app/bootstrap.py
-    rm -f "$private_directory/enrollment_token"
-    exec python /app/app.py "$@"
+    set -- "$@" --force-enroll
   fi
-  exec python /app/app.py --enroll "$@"
 fi
 
 unset CYNAPSA_TOKEN
-exec python /app/app.py "$@"
+if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
+  exec "$@" -- python /app/app.py --quiet
+fi
+exec "$@" -- python /app/app.py

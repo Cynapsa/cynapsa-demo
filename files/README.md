@@ -28,7 +28,7 @@ Required configuration:
 - `LITELLM_API_KEY`: the model gateway key, or an OpenAI key when using OpenAI
   directly. Alternatively use `.private/litellm_api_key` with mode `0600`.
 - `LITELLM_BASE_URL`, `LITELLM_MODEL`: defaults are
-  `https://litellm.eladrave.com` and `gpt-5.6-terra-high`. For direct OpenAI use
+  `https://litellm.eladrave.com` and `chatgpt/gpt-5.6-terra-high`. For direct OpenAI use
   `https://api.openai.com/v1` and a model available to your account.
 
 The runner mounts the host directory at `/data` **read-only** and overrides the

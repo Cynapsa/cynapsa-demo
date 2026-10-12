@@ -37,7 +37,7 @@ key is required on every run, either as `LITELLM_API_KEY` in `.env` or in the
 ignored `.private/litellm_api_key` file with mode `0600`. `run.sh` mounts that
 file read-only. `GOOGLE_MAPS_API_KEY` and `DEMO_MESH_ID` are also required.
 The default gateway is `https://litellm.eladrave.com`, using model
-`gpt-5.6-terra-high`; override with `LITELLM_BASE_URL` and `LITELLM_MODEL`.
+`chatgpt/gpt-5.6-terra-high`; override with `LITELLM_BASE_URL` and `LITELLM_MODEL`.
 Remove obsolete `GEMINI_*` entries from any existing local `.env` file;
 the runner ignores them.
 For each setting, `.env` takes precedence over an exported shell variable;

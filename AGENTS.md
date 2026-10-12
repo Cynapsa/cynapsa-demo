@@ -98,7 +98,7 @@ GOOGLE_MAPS_API_KEY=replace-with-google-maps-api-key
 Put the gateway key in `maps/.private/litellm_api_key` (mode `0600`), or
 uncomment `LITELLM_API_KEY` in `.env`. `LITELLM_BASE_URL` and `LITELLM_MODEL`
 are optional overrides; defaults are `https://litellm.eladrave.com` and
-`gpt-5.6-terra-high`. Start the agent:
+`chatgpt/gpt-5.6-terra-high`. Start the agent:
 
 ```sh
 ./run.sh

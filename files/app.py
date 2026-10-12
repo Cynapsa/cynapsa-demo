@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     model = ModelClient(
         litellm_key(),
         base_url=os.environ.get("LITELLM_BASE_URL", "https://litellm.eladrave.com"),
-        model=os.environ.get("LITELLM_MODEL", "gpt-5.6-terra-high"),
+        model=os.environ.get("LITELLM_MODEL", "chatgpt/gpt-5.6-terra-high"),
     )
     app.state.database = database
     app.state.model = model

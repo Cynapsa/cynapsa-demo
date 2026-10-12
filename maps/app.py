@@ -22,7 +22,7 @@ from rpc_logging import configure_logging, log_handler
 
 
 LOG = logging.getLogger(__name__)
-MODEL = os.environ.get("LITELLM_MODEL", "gpt-5.6-terra-high")
+MODEL = os.environ.get("LITELLM_MODEL", "chatgpt/gpt-5.6-terra-high")
 BASE_URL = os.environ.get("LITELLM_BASE_URL", "https://litellm.eladrave.com")
 TOOLS: list[dict[str, Any]] = [
     {

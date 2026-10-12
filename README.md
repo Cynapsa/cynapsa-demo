@@ -148,7 +148,7 @@ independently verify the intended deployed workers before targeting them.
 Their `.env.example` files list the API credentials they require on every run.
 For this local demo, the model key can instead be placed in each agent's ignored
 `.private/litellm_api_key` file (mode `0600`); `run.sh` mounts it read-only.
-The default model is `gpt-5.6-terra-high` at `https://litellm.eladrave.com`.
+The default model is `chatgpt/gpt-5.6-terra-high` at `https://litellm.eladrave.com`.
 
 ## Independent directories
 

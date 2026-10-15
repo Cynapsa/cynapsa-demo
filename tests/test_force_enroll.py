@@ -168,20 +168,20 @@ class ForceEnrollTests(unittest.TestCase):
                 self.assertEqual(direct.returncode, 0, direct.stderr)
 
                 # Cloud environments select one of two visible, exact commands;
-                # the HTTP variant stays bound to loopback.
+                # network ingress, not the bind address, controls reachability.
                 uvicorn_log = scratch_path / "uvicorn.log"
                 fake_uvicorn = scratch_path / "uvicorn"
                 fake_uvicorn.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$UVICORN_LOG"\n')
                 fake_uvicorn.chmod(0o755)
                 env["UVICORN_LOG"] = str(uvicorn_log)
                 env["DEMO_RUN_COMMAND"] = (
-                    "uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log"
+                    "uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log"
                 )
                 http = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
                 self.assertEqual(http.returncode, 0, http.stderr)
                 self.assertEqual(
                     uvicorn_log.read_text().strip(),
-                    "app:app --host 127.0.0.1 --port 8000 --no-access-log",
+                    "app:app --host 0.0.0.0 --port 8000 --no-access-log",
                 )
                 env["DEMO_RUN_COMMAND"] = "sh -c dangerous"
                 unsupported = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
@@ -221,7 +221,7 @@ class ForceEnrollTests(unittest.TestCase):
             self.assertIn(
                 f"run --mesh-id test-mesh --profile-id demo-files --rpc-timeout-ms 110000 "
                 f"--token-file {private / 'enrollment_token'} -- uvicorn app:app "
-                "--host 127.0.0.1 --port 8000 --no-access-log",
+                "--host 0.0.0.0 --port 8000 --no-access-log",
                 cli_log.read_text(),
             )
 

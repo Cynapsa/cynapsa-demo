@@ -27,8 +27,9 @@ and use `./run.sh --force-enroll` with a valid token after stopping the old
 process. Do not run two processes with the same saved installation.
 
 For ordinary HTTP mode, set `DEMO_RUN_COMMAND=uvicorn app:app --host
-127.0.0.1 --port 8000 --no-access-log`. The AWS task has no HTTP ingress, so
-this loopback listener is not remotely reachable. If you intentionally build
+0.0.0.0 --port 8000 --no-access-log`. Uvicorn listens on all container
+interfaces. The AWS task security group denies inbound traffic, so this HTTP
+listener is not remotely reachable. If you intentionally build
 an HTTP deployment, point `DEMO_MAPS_ORIGIN` and optional `DEMO_FILES_ORIGIN`
 at reachable HTTP servers and add real authentication before exposing it.
 

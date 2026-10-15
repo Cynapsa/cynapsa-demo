@@ -55,9 +55,9 @@ fi
 
 run_command=${DEMO_RUN_COMMAND:-"cynapsa run --config $private_directory/cynapsa.json -- app:app"}
 case "$run_command" in
-  "uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log")
+  "uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log")
     unset CYNAPSA_TOKEN
-    exec uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log
+    exec uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log
     ;;
   "cynapsa run --config $private_directory/cynapsa.json -- app:app") ;;
   *) echo "unsupported DEMO_RUN_COMMAND" >&2; exit 64 ;;

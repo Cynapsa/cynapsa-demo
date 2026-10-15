@@ -22,9 +22,10 @@ agent IDs, and drives the FastAPI lifespan directly without an HTTP listener.
 Files still uses socketless Uvicorn through the CLI. Inter-agent traffic is
 Cynapsa RPC even though application code uses HTTP request/response objects.
 Maps and Orchestrator accept one of two exact `DEMO_RUN_COMMAND` values:
-the Cynapsa command above or `uvicorn app:app --host 127.0.0.1 --port 8000
---no-access-log`. The latter is ordinary HTTP bound to container loopback,
-not publicly reachable. An explicit trusted image command remains possible.
+the Cynapsa command above or `uvicorn app:app --host 0.0.0.0 --port 8000
+--no-access-log`. The latter is ordinary HTTP bound to all container
+interfaces. Cloud network ingress, not the bind address, limits reachability.
+An explicit trusted image command remains possible.
 
 Start Maps and optional Files first, then Orchestrator, then Client. Do not
 run two containers with the same saved installation profile concurrently.

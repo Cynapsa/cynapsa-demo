@@ -62,9 +62,11 @@ instructions. Not-found is a successful answer, not a transport error. Invalid
 questions return HTTP 400, model unavailability 503, and unexpected handler
 failures a sanitized 502.
 
-The Uvicorn listener binds only `127.0.0.1:8000` inside the container. No host
-port is published. FastAPI startup prints `demo-files HTTP app ready on /files`;
-this means the app is running, not that a particular remote peer can reach it.
+The ordinary Uvicorn command specifies `0.0.0.0:8000`, but the Cynapsa CLI
+intercepts startup and disables its HTTP listener. If run without the CLI,
+Uvicorn would listen on all container interfaces; the local Docker runner
+publishes no host port. FastAPI startup prints `demo-files HTTP app ready on
+/files`; this means the app is running, not that a remote peer can reach it.
 
 ## Tools and limits
 

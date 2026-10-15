@@ -27,10 +27,11 @@ installation was revoked after mesh removal. Stop the old process first.
 For a separate installation, select another
 `CYNAPSA_DEMO_MAPS_VOLUME` and ensure the grant has capacity.
 
-Set `DEMO_RUN_COMMAND=uvicorn app:app --host 127.0.0.1 --port 8000
+Set `DEMO_RUN_COMMAND=uvicorn app:app --host 0.0.0.0 --port 8000
 --no-access-log` in the container environment to run the same app as ordinary
-HTTP. It binds only to container loopback; the existing cloud deployment has
-no HTTP ingress, so external clients cannot reach it. The default is the
+HTTP. It listens on all container interfaces; the existing cloud worker pool
+has no public endpoint or Direct VPC ingress, so external clients cannot reach
+it. The default is the
 full Cynapsa command above. Only these two exact values are accepted.
 
 ## Bounds and logs

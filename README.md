@@ -43,9 +43,11 @@ command is `cynapsa run --config /tmp/cynapsa-private/cynapsa.json -- app:app`.
 The entrypoint creates each agent's config from its environment, then the SDK
 starts the ASGI lifespan directly without Uvicorn or an HTTP listener. In an
 AWS task definition or GCP worker-pool revision, set `DEMO_RUN_COMMAND` to
-`uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log` to run the
-same code as ordinary HTTP. This mode is loopback-only and not reachable from
-another machine; use it to show that remote access requires Cynapsa. Switch
+`uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log` to run the
+same code as ordinary HTTP. Uvicorn listens on the container's network
+interfaces; cloud network ingress controls whether anyone can reach it.
+The demo's AWS task security group denies inbound traffic, and its GCP worker
+pool has no public endpoint or Direct VPC ingress. Switch
 the variable back to the Cynapsa command to restore mesh access. No image or
 application-code change is required for the switch, although the cloud
 platform starts a replacement task/revision.

@@ -37,6 +37,30 @@ if [ "$profile_present" = false ] && \
 fi
 unset DEMO_STATE_KEY_B64 DEMO_STATE_PROFILE_B64 DEMO_STATE_PROFILE_FILENAME
 
+# An explicit image command remains available for local Docker overrides.
+if [ "$#" -gt 0 ]; then
+  unset CYNAPSA_TOKEN
+  exec "$@"
+fi
+
+run_command=${DEMO_RUN_COMMAND:-"cynapsa run --config $private_directory/cynapsa.json -- app:app"}
+case "$run_command" in
+  "uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log")
+    unset CYNAPSA_TOKEN
+    exec uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log
+    ;;
+  "cynapsa run --config $private_directory/cynapsa.json -- app:app") ;;
+  *) echo "unsupported DEMO_RUN_COMMAND" >&2; exit 64 ;;
+esac
+
+: "${DEMO_MESH_ID:?DEMO_MESH_ID is required}"
+: "${DEMO_MAPS_AGENT_ID:?DEMO_MAPS_AGENT_ID is required}"
+if [ -n "${DEMO_FILES_AGENT_ID:-}" ]; then
+  export DEMO_FILES_ORIGIN=${DEMO_FILES_ORIGIN:-http://demo-files.local}
+else
+  unset DEMO_FILES_ORIGIN
+fi
+
 if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   if [ -n "${CYNAPSA_TOKEN:-}" ]; then
     printf '%s' "$CYNAPSA_TOKEN" > "$private_directory/enrollment_token"
@@ -47,15 +71,7 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
     exit 78
   fi
   chmod 600 "$private_directory/enrollment_token"
-  unset CYNAPSA_TOKEN
-  if [ "${DEMO_FORCE_ENROLL:-}" = 1 ]; then
-    cynapsa run --mesh-id "$DEMO_MESH_ID" --profile-id demo-orchestrator \
-      --token-file "$private_directory/enrollment_token" --force-enroll \
-      -- python /app/bootstrap.py
-    rm -f "$private_directory/enrollment_token"
-    exec python /app/app.py
-  fi
-  exec python /app/app.py --enroll
 fi
 unset CYNAPSA_TOKEN
-exec python /app/app.py
+python3 "$(dirname "$0")/make_config.py" "$private_directory/cynapsa.json"
+exec cynapsa run --config "$private_directory/cynapsa.json" -- app:app

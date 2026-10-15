@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
 import importlib.util
 import json
 import logging
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -18,23 +17,12 @@ MAPS = Path(__file__).resolve().parents[1] / "maps"
 
 
 def _maps_app(monkeypatch: pytest.MonkeyPatch):
-    # These tests exercise maps-tool diagnostics, not the SDK transport.
-    # Avoid requiring a vendored SDK in this standalone demo checkout.
-    if importlib.util.find_spec("cynapsa") is None:
-        sdk_stub = ModuleType("cynapsa")
-
-        class RPCException(Exception):
-            def __init__(self, status_code, *, code, detail):
-                super().__init__(detail)
-                self.status_code = status_code
-                self.code = code
-                self.detail = detail
-
-        sdk_stub.RPCException = RPCException
-        monkeypatch.setitem(sys.modules, "cynapsa", sdk_stub)
     monkeypatch.syspath_prepend(str(MAPS))
-    runtime = importlib.import_module("runtime")
-    monkeypatch.setattr(runtime, "prepare_runtime", lambda: None)
+    for name in ("llm", "places", "runtime"):
+        spec = importlib.util.spec_from_file_location(name, MAPS / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, module)
+        spec.loader.exec_module(module)
     spec = importlib.util.spec_from_file_location("demo_maps_diagnostic_app", MAPS / "app.py")
     assert spec is not None and spec.loader is not None
     app = importlib.util.module_from_spec(spec)
@@ -67,7 +55,7 @@ def test_unknown_place_id_reports_reason_without_values(
         details=Mock(),
     )
 
-    with caplog.at_level(logging.WARNING), pytest.raises(app.cynapsa.RPCException) as failure:
+    with caplog.at_level(logging.WARNING), pytest.raises(app.MapsApplicationError) as failure:
         app.answer_question("private-question-sentinel", client, places)
 
     assert failure.value.status_code == 502
@@ -87,7 +75,7 @@ def test_invalid_tool_arguments_report_safe_reason(
     }))
     places = SimpleNamespace(search=Mock(), details=Mock())
 
-    with caplog.at_level(logging.WARNING), pytest.raises(app.cynapsa.RPCException) as failure:
+    with caplog.at_level(logging.WARNING), pytest.raises(app.MapsApplicationError) as failure:
         app.answer_question("private-question-sentinel", client, places)
 
     assert failure.value.code == "maps_tool_error"
@@ -118,7 +106,7 @@ def test_ten_tool_calls_are_allowed_but_eleven_are_rejected(
     assert places.search.call_count == 10
 
     eleven_call_client = SimpleNamespace(complete=Mock(return_value={"tool_calls": calls}))
-    with caplog.at_level(logging.WARNING), pytest.raises(app.cynapsa.RPCException) as failure:
+    with caplog.at_level(logging.WARNING), pytest.raises(app.MapsApplicationError) as failure:
         app.answer_question("test", eleven_call_client, places)
 
     assert failure.value.code == "maps_tool_error"
@@ -150,7 +138,7 @@ def test_graph_stops_after_three_model_rounds(monkeypatch):
         "tool_calls": [_call("search_places", '{"query":"gym"}', "c1")],
     }))
     places = SimpleNamespace(search=Mock(return_value={"places": []}))
-    with pytest.raises(app.cynapsa.RPCException) as failure:
+    with pytest.raises(app.MapsApplicationError) as failure:
         app.answer_question("Find a gym", client, places)
     assert failure.value.code == "maps_no_answer"
     assert client.complete.call_count == 3

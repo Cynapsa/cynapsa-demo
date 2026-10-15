@@ -8,7 +8,7 @@ COPY github-askpass.sh /usr/local/bin/cynapsa-git-askpass
 RUN chmod 0555 /usr/local/bin/cynapsa-git-askpass
 ARG SOURCE_REFRESH
 ARG CORE_GIT_REF=main
-ARG SDK_GIT_REF=main
+ARG SDK_GIT_REF=feature/cli-operations
 RUN --mount=type=secret,id=github_token,required=true \
     set -eu; \
     : "$SOURCE_REFRESH"; \
@@ -44,6 +44,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     CYNAPSA_CORE_LIBRARY=/opt/cynapsa/libcynapsacore.so \
     CYNAPSA_STATE_DIRECTORY=/var/lib/cynapsa \
+    DEMO_MEMORY_DIRECTORY=/var/lib/cynapsa \
     DEMO_PRIVATE_DIRECTORY=/tmp/cynapsa-private
 
 RUN groupadd --gid 65532 cynapsa \
@@ -58,7 +59,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt /tmp/wheels/*.whl \
     && rm -rf /tmp/wheels
 COPY --from=core-builder /out/libcynapsacore.so /opt/cynapsa/libcynapsacore.so
 COPY --from=sources /src/source-revisions /opt/cynapsa/source-revisions
-COPY app.py bootstrap.py connection_alerts.py rpc_logging.py llm.py runtime.py workflow.py entrypoint.sh ./
+COPY app.py llm.py runtime.py workflow.py make_config.py entrypoint.sh ./
 RUN chmod 0555 /app/entrypoint.sh /opt/cynapsa/libcynapsacore.so
 
 USER 65532:65532

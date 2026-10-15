@@ -1,181 +1,64 @@
-# Demo orchestrator
+# Orchestrator agent
 
-Console alerts observe the SDK event stream independently of request handling
-and input. Example: `ALERT mesh connectivity: available -> degraded`, followed
-by recovery to `available` or failure to `unavailable`. SDK lifecycle changes
-and canonical `core.error` details are also printed when emitted. A disconnect
-alone does not identify revocation; the app is not automatically terminated.
-The observer owns `next_event()` and stops before intentional session teardown.
-Rebuild with `./run.sh --build` after the updated demo and Core sources have
-been pushed; existing images do not gain these changes automatically.
+This is a conventional FastAPI/LangGraph application. POST `/ask` with JSON
+`{"prompt": "...", "conversation_id": "chat-1"}`. The conversation ID is
+optional; if omitted, a new one is returned. The graph can answer directly,
+ask Maps, ask the optional Files agent, or chain Files → Maps to answer a
+location question using a fact found in private documents. The app imports
+HTTPX, not the Cynapsa SDK.
 
-This identity accepts `/ask` RPCs from the demo client. An OpenAI-compatible
-LiteLLM gateway decides whether to answer directly or call the maps identity
-over Cynapsa. A local LangGraph manages reasoning, the remote tool call, and
-final answer composition. Maps runs its own graph on its own machine; it is
-not an in-process subgraph.
-The async native SDK must dispatch handlers on the persistent loop that owns
-the session, graph, and SQLite saver. Keep that loop running through
-`await session.close()`; per-request `asyncio.run()` dispatch is incompatible
-with reused async locks. This requires the async-dispatch fix on the SDK's
-`main` branch; rebuilding against an older SDK does not include it.
-Downstream native and canonical remote errors are logged with their actual
-status, code, message, and public details in this agent's terminal. The client
-receives the generic `The demo could not answer` RPC error for those downstream
-native/internal failures. Validation, timeout, and model failures have distinct
-public codes below. Treat terminal details/traces as private.
+## Run and destination mapping
 
-The directory is independently runnable. Its image build fetches the Python
-SDK and Go Core `main` branches from GitHub; it does not use
-repository-root files or sibling directories. Set `CYNAPSA_GITHUB_TOKEN`
-in this directory's ignored `.env` for builds. It is not sent to the
-running container.
+Copy `.env.example` to ignored `.env`. Set `DEMO_MESH_ID`,
+`DEMO_MAPS_AGENT_ID` (canonical bare JID), an enrollment `CYNAPSA_TOKEN` for
+new installations, the LiteLLM API key, and `CYNAPSA_GITHUB_TOKEN` for image
+builds. Set optional `DEMO_FILES_AGENT_ID` to enable the Files tool. The
+LiteLLM key may instead live in ignored `.private/litellm_api_key` with mode
+0600. Then run `./run.sh`. The CLI maps `http://demo-maps.local` to Maps's ID
+and `http://demo-files.local` to Files's ID. Its generated JSON config holds
+the mesh ID, destination mappings, timeout, and optional token-file path (not
+the token). The CLI runs `app:app` directly without an HTTP listener: HTTPX
+calls cross the Cynapsa mesh; inbound `/ask` goes to FastAPI.
 
-## Run
+`./run.sh --build` refreshes SDK `feature/cli-operations` and Core `main`. Existing images do not update
+automatically. The installation profile persists in the
+`cynapsa-demo-orchestrator-state` Docker volume. If revoked, rejoin the mesh
+and use `./run.sh --force-enroll` with a valid token after stopping the old
+process. Do not run two processes with the same saved installation.
 
-```sh
-cp .env.example .env
-# Set every required value in .env.
-./run.sh
-```
-
-The credentials are runtime environment variables and are never stored in the
-image. Encrypted Cynapsa state persists in the
-`cynapsa-demo-orchestrator-state` Docker volume. Remove `CYNAPSA_TOKEN` from
-`.env` after enrollment. The model gateway key is required on every run,
-either as `LITELLM_API_KEY` in `.env` or in the ignored
-`.private/litellm_api_key` file with mode `0600`; `run.sh` mounts the file
-read-only. The default gateway is `https://litellm.eladrave.com`, using model
-`chatgpt/gpt-5.6-terra-high`. Override with `LITELLM_BASE_URL` and `LITELLM_MODEL`.
-Remove obsolete `GEMINI_*` entries from any existing local `.env` file;
-the runner ignores them.
-`DEMO_MESH_ID` and `DEMO_MAPS_AGENT_ID` are also required on every run.
-For each setting, `.env` takes precedence over an exported shell variable;
-the shell supplies only settings absent from `.env`.
-
-Use `./run.sh --build` to force a rebuild from this directory. The image takes
-`CYNAPSA_TOKEN` at container startup from the ignored `.env` or shell
-environment only when its state volume has no saved profile. No token is baked
-into the Dockerfile or image.
-
-## Test another identity
-
-```sh
-CYNAPSA_TOKEN='another-enrollment-token' \
-  CYNAPSA_DEMO_ORCHESTRATOR_VOLUME=cynapsa-demo-orchestrator-test-2 \
-  ./run.sh
-```
-
-Remove `CYNAPSA_TOKEN` from `.env` before using the shell-token example above.
-The Cloud Run worker pool `cynapsa-demo-orchestrator` was previously observed
-at zero instances; current status was not checked in this audit.
-For a new local installation, use an empty state volume and an
-active enrollment grant whose mesh scope and installation limit allow it. The
-existing volume uses its saved installation proof, not `CYNAPSA_TOKEN`.
-After mesh removal and re-addition, that proof is revoked. Supply a still-valid
-token and run `./run.sh --force-enroll` to replace the installation through
-the built-in `cynapsa run --force-enroll` CLI in the same selected volume. The
-CLI session closes before the native orchestrator starts from the new profile.
-The fetched SDK includes force-enroll and native remote-error handling. After
-the SDK/Core branches change, rebuild with `./run.sh --build` and restart any
-running container; subsequent runs reuse the rebuilt image.
+For ordinary HTTP mode, set `DEMO_RUN_COMMAND=uvicorn app:app --host
+127.0.0.1 --port 8000 --no-access-log`. The AWS task has no HTTP ingress, so
+this loopback listener is not remotely reachable. If you intentionally build
+an HTTP deployment, point `DEMO_MAPS_ORIGIN` and optional `DEMO_FILES_ORIGIN`
+at reachable HTTP servers and add real authentication before exposing it.
 
 ## Conversation memory
 
-Send `{"prompt": "...", "conversation_id": "..."}` to `/ask`. The client
-creates and prints the ID, uses it for every turn, and accepts `new` to start
-a fresh chat. Requests without an ID still work, but each gets a fresh ID
-returned in the response. IDs contain 1–64 letters/numbers/underscores/hyphens.
+LangGraph uses async SQLite checkpoints in a private directory. In the local
+container, the default is `/var/lib/cynapsa/conversations.sqlite` in the
+named state volume. `DEMO_MEMORY_DIRECTORY` can move memory to a private
+owner-controlled 0700 directory (e.g. local task disk while credentials are
+on EFS); its SQLite file is 0600 and not encrypted. Do not place a live SQLite
+WAL file on shared NFS/EFS or run multiple writers against it. Replacement of
+task-local disk loses conversation history.
 
-LangGraph's async SQLite checkpointer stores state in
-`/var/lib/cynapsa/conversations.sqlite`, inside the existing orchestrator
-volume. Restarting/rebuilding the container preserves memory when the volume
-is retained. Threads are scoped to this orchestrator's canonical identity,
-authenticated sender, mesh, and conversation ID—not sender fields from JSON.
-A different client cannot access your history by guessing your ID. A new
-installation of the same logical client can resume a chat using the same ID.
+The key includes owner, mesh, sender, and conversation ID. In Cynapsa mode,
+the CLI's ASGI bridge supplies authenticated sender as
+`request.state.cynapsa_sender`; no user JSON field can spoof it. In direct
+HTTP mode the demo falls back to HTTP client address. That fallback is not
+an authentication system, so untrusted HTTP clients must be authenticated
+separately before using this memory design. The model sees the last eight
+successful turns; `new` in Client creates a fresh conversation ID.
 
-The model sees the last eight successful user/assistant turn pairs; stored
-answer context is capped at 4,000 characters per turn. It can use a remembered
-address to formulate a self-contained Maps question. Maps itself is stateless,
-and old map evidence is not treated as a fresh Places lookup. Failed turns
-do not enter the successful history; later turns start fresh rather than
-automatically retrying an interrupted RPC.
+## Bounds and errors
 
-This is persistent conversation memory, not a cross-chat user-profile store.
-Checkpoint records can grow on disk even though model context is bounded.
-The file is mode 0600 in a private directory, but is not encrypted like the
-Cynapsa credential profile. Protect the volume: prompts/answers/tool evidence
-are private. `new` does not delete old checkpoints. One process owns the file
-and serializes requests; shared-volume replicas/distributed memory and disk
-retention policies are not implemented. See
-[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence).
+There are at most four remote tool calls per question, and both tools remain
+available after each result so a Files result can inform a subsequent Maps
+question. Remote calls use HTTPX with a 100-second per-call timeout; the
+Client's `/ask` timeout is 140 seconds, not a guarantee that every chain
+finishes. Invalid input returns 400, downstream timeouts 504, model failure
+503, and other failures a generic 502 to the caller. Real downstream errors
+are logged in the Orchestrator terminal. Successful model HTTP access logs
+are suppressed; full demo questions/answers are logged without redaction.
 
-## Model/tool and error bounds
-
-The graph loops `reason -> agent_tools -> reason` until the model returns a final
-answer. Each question allows at most four remote tool calls in total, to Maps or
-the optional Files agent. Both tool schemas remain available after each result,
-so Files can supply a city for a subsequent Maps search in the same question.
-Multiple calls in a model response run sequentially after the entire batch is
-validated; dependent lookups should be requested in separate reasoning rounds.
-Questions must contain 1–2000 characters, and call IDs must be nonempty and unique
-within the turn. Unknown/malformed/over-budget batches fail before any calls in
-that batch are sent. Remote failures are propagated, not automatically retried.
-At four calls, the next model completion uses `tool_choice=none`; an attempted
-extra call is rejected. The prompt requires honest partial-result reporting at
-the limit, not invented missing information. There are at most five model
-completions. Each downstream RPC retains a 100,000-ms TTL and the model HTTP
-client retains a 25-second timeout. These are not a whole-question deadline:
-the client's existing 140,000-ms `/ask` TTL can expire during a slow chain.
-Successful answers retain both `files` and `maps` evidence; repeated calls to
-the same agent retain earlier citations. The final answer alone enters successful
-conversation history. A failed chain is not resumed/replayed by a later turn.
-
-Bad request input returns 400 `bad_request`, maps/native safety timeouts return
-504 `agent_timeout`, and model failures return 503 `model_unavailable`.
-Downstream canonical remote/native errors and other internal failures return
-502 `orchestrator_failed`; their actual details/traces remain in this terminal.
-The destination must be a complete canonical **bare** JID, not a friendly alias
-or a full installation-session address. No active target is unavailable;
-pending resume is not an offline mailbox or delivery receipt.
-
-Saved profiles take precedence over new tokens during ordinary runs but can
-still fail credential expiry/attachment checks. Stop the old container before
-force-enrolling a replacement in the same volume. See
-[source dependencies](SOURCE_DEPENDENCIES.md) for remote-versus-local changes.
-## Optional files agent
-
-Set `DEMO_FILES_AGENT_ID` to its canonical bare JID to enable `ask_files_agent`.
-Blank/absent preserves maps-only operation. Private-document questions should
-use this tool; place searches use Maps. Combined questions can chain Files then
-Maps within the four-call budget, without another user prompt. For example,
-“Find Guy's home city and recommend cafes there” should retrieve the city, search
-Maps using it, and return both facts and citations in one final answer.
-File results are returned under `files`, with source paths/line evidence for the
-client. Existing `maps` responses and identity-scoped conversation memory remain.
-Downstream timeout is now 504 `agent_timeout`; detailed downstream errors are
-logged locally while the client receives the existing generic 502 failure.
-Rebuild/restart after application changes. File excerpts and answers may be
-retained in the orchestrator/model context; see `../files/README.md` for privacy.
-
-## Cloud filesystem separation
-
-`DEMO_MEMORY_DIRECTORY` optionally selects a private, owner-controlled (0700)
-directory for SQLite, separate from `CYNAPSA_STATE_DIRECTORY`. The Docker image
-provides `/var/lib/cynapsa-memory` for task-local memory; AWS uses this while
-credentials persist on EFS. Chat history there resets on task replacement.
-Local runs keep the default SQLite path in the existing local Docker volume.
-Do not use NFS/EFS for the live SQLite WAL database or share it between replicas.
-
-## Traffic logs
-
-The app logs full Cynapsa request/response content for `/ask` and downstream
-Maps/Files calls, with each peer's full ID. Set `DEMO_CLIENT_AGENT_ID` to label
-the incoming client as `client`; outgoing Maps/Files names come from their
-destination-ID variables. There is no redaction or truncation, so prompts and
-file evidence may appear in cloud logs. Headers are not logged. LLM HTTP access
-logs are quiet. Existing warnings/error diagnostics and connection alerts
-remain. A handler return precedes SDK validation/transmission and is not a
-delivery receipt.
-Rebuild with `./run.sh --build`; cloud images need redeployment.
+See [source dependencies](SOURCE_DEPENDENCIES.md) for build provenance.

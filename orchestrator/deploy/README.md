@@ -1,5 +1,8 @@
 # AWS orchestrator deployment
 
+Historical deployment record: the image/revisions below predate this branch's
+HTTP-app/CLI conversion. Editing this repository does not update the ECS task.
+
 Updated 2026-09-29: account `821211778460`, region `us-east-1`, ECS cluster `cynapsa-demo`,
 service `demo-orchestrator`, task definition `demo-orchestrator:3`. Exact inputs
 are in `aws-task-definition.json`; it contains references, not secret values.

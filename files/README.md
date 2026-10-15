@@ -100,7 +100,7 @@ ask about its mounted documents; there is no per-document/user access control.
 Never point this agent at your whole home directory or a secret store.
 
 The entity directory is independent: its Dockerfile
-builds SDK/Core from GitHub `main`, and includes them in the
+builds SDK `feature/cli-operations` and Go Core `main` from GitHub, and includes them in the
 resulting image. Local unpushed SDK/Core changes are not in the image. No
 sibling files are required.
 Read `SOURCE_DEPENDENCIES.md` for provenance. `./run.sh --build` refreshes the
@@ -114,8 +114,8 @@ in its volume. Real `.env`, keys, and documents must not be committed.
 
 The plain HTTP app logs the question and response content, including file
 excerpts, without redaction or truncation. Use only non-sensitive demo files.
-It does not receive authenticated peer-ID metadata through the ASGI interface,
-so it does not label the sender. Headers are not logged. Uvicorn access logs and
-successful LLM HTTP access logs are quiet; warnings and errors remain. Unlike
-the native demo entities, this app has no SDK event consumer or connection
-alerts. Rebuild with `./run.sh --build`.
+The ASGI bridge supplies authenticated peer metadata in request state, but this
+app does not use it to label the sender. Headers are not logged. Uvicorn access
+logs and successful LLM HTTP access logs are quiet; warnings and errors remain.
+Like the other HTTP demo entities, this app has no SDK event consumer or
+connection alerts. Rebuild with `./run.sh --build`.

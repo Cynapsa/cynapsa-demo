@@ -1,5 +1,6 @@
 **/.private/
 **/.state/
+**/.memory/
 **/.env
 **/__pycache__/
 **/.pytest_cache/

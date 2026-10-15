@@ -8,7 +8,7 @@ COPY github-askpass.sh /usr/local/bin/cynapsa-git-askpass
 RUN chmod 0555 /usr/local/bin/cynapsa-git-askpass
 ARG SOURCE_REFRESH
 ARG CORE_GIT_REF=main
-ARG SDK_GIT_REF=main
+ARG SDK_GIT_REF=feature/cli-operations
 RUN --mount=type=secret,id=github_token,required=true \
     set -eu; \
     : "$SOURCE_REFRESH"; \

@@ -1,410 +1,108 @@
-# Demo entity runbook for agents
+# Cynapsa demo operational runbook
 
-This file is the operational contract for running the four entities in this
-repository. Do not put real enrollment tokens or API keys in tracked files,
-Dockerfiles, images, commits, logs, or documentation.
+This working tree has four independently buildable entity directories. Do not
+commit enrollment tokens, API keys, installation profiles, document databases,
+or conversation SQLite files. Each image clones SDK `feature/cli-operations`
+and Go Core `main` from GitHub at build time; unpushed source edits are not in an image.
+Record and verify `/opt/cynapsa/source-revisions` when debugging a build.
 
-## Topology
-
-This runbook describes the local working-tree implementation, not verified
-GitHub heads or deployed cloud status. Builds clone remote SDK/Core branch
-heads; unpushed local changes do not enter the image. Local-policy removal,
-the SDK async-loop fix, and Core connectivity events are published on those
-branches. Verify an image's recorded revisions after rebuilding; publishing
-source does not update existing containers or prove cloud deployment status.
-Enrollment is owned separately and remains read-only here.
-
-Start server identities before the interactive client:
+## Topology and launch mode
 
 ```text
-client --Cynapsa RPC /ask--> orchestrator --Cynapsa RPC /maps--> maps
-                                                                   |
-                                                                   +--> Google Places API
+client (Requests) --/ask--> orchestrator (FastAPI/LangGraph)
+                              |--/maps--> maps (FastAPI/LangGraph + Google Places)
+                              +--/files--> files (FastAPI/LangGraph + read-only docs)
 ```
 
-Every directory is independently runnable. Its `run.sh` builds a local
-container image from that directory when the image is not already available.
-The directory includes its own application, Docker build, and runtime scripts.
-During each image build, it fetches the `main` branches of the Python SDK and
-Go Core from GitHub using `CYNAPSA_GITHUB_TOKEN` as a BuildKit
-secret. Put that token in the entity's ignored `.env`; it needs read access to
-both repositories and is never passed to the running container. Enrollment
-tokens and installation state are supplied at runtime and are not part of the image.
-
-## Prerequisites
-
-- Git
-- Docker Desktop or a compatible Docker Engine, already running
-- A GitHub token with read access to both Cynapsa source repositories for builds
-- All participating Cynapsa identities must belong to the same mesh
-- An active enrollment grant with capacity for each new local installation
-- An LLM API key for maps, orchestrator, and the optional files container
-- A Google Maps API key with Places API access for the maps container
-
-Enrollment grants are reusable by default, but may have a mesh scope, expiry,
-revocation, or installation limit. After successful enrollment, each identity
-uses the encrypted installation profile in its Docker volume and no longer
-needs the original token. Mesh removal revokes installations in that mesh,
-not enrollment grants. After rejoining, the old profile cannot authenticate;
-use `./run.sh --force-enroll` with a still-valid token to create a new
-installation in the same state volume. Go Core handles profile replacement.
-
-Do not configure an entity's own agent ID. Enrollment resolves that identity
-and Go Core stores it in the profile. `DEMO_ORCHESTRATOR_AGENT_ID` and
-`DEMO_MAPS_AGENT_ID` are destination IDs used by the application for routing;
-they are not local identity overrides.
-
-## Choose a run mode
-
-### Client against deployed agents
-
-Only run the client if both demo worker pools have been independently verified
-available. They were previously observed at zero instances; this audit did not
-check current cloud status. Configure the client's mesh
-ID and the orchestrator's bare agent ID with the client enrollment token.
-
-### All three entities locally
-
-Use separate local Cynapsa installations. Do not start a local server with the
-same installation profile while a deployed Cloud Run worker is active. Both
-demo worker pools were previously observed disabled, but do not reuse their saved Cloud
-Run profiles for local installs. Reuse an active grant only when its scope and
-installation limit permit another installation.
-
-For isolated local testing, create or select server identities in one mesh and
-provide valid enrollment grants. Start maps first. Copy its printed bare agent
-ID into the orchestrator's `DEMO_MAPS_AGENT_ID`. Start the orchestrator and copy
-its printed bare agent ID into the client's `DEMO_ORCHESTRATOR_AGENT_ID`.
-
-## 1. Run the maps agent
-
-From the repository root:
-
-```sh
-cd maps
-test -f .env || cp .env.example .env
-```
-
-Set these values in `maps/.env`:
-
-```dotenv
-CYNAPSA_TOKEN=replace-with-maps-enrollment-token
-CYNAPSA_GITHUB_TOKEN=replace-with-github-token
-DEMO_MESH_ID=replace-with-mesh-id
-# LITELLM_API_KEY=replace-with-gateway-api-key
-GOOGLE_MAPS_API_KEY=replace-with-google-maps-api-key
-```
-
-Put the gateway key in `maps/.private/litellm_api_key` (mode `0600`), or
-uncomment `LITELLM_API_KEY` in `.env`. `LITELLM_BASE_URL` and `LITELLM_MODEL`
-are optional overrides; defaults are `https://litellm.eladrave.com` and
-`chatgpt/gpt-5.6-terra-high`. Start the agent:
-
-```sh
-./run.sh
-```
-
-Successful startup prints:
-
-```text
-demo-maps ready as <agent-id>@connect.cynapsa.com
-```
-
-After the first successful enrollment, remove `CYNAPSA_TOKEN` from `.env`. Keep
-both API keys available for every run.
-
-Default state volume: `cynapsa-demo-maps-state`.
-
-## 2. Run the orchestrator
-
-In another terminal, from the repository root:
-
-```sh
-cd orchestrator
-test -f .env || cp .env.example .env
-```
-
-Set these values in `orchestrator/.env`:
-
-```dotenv
-CYNAPSA_TOKEN=replace-with-orchestrator-enrollment-token
-CYNAPSA_GITHUB_TOKEN=replace-with-github-token
-DEMO_MESH_ID=replace-with-mesh-id
-DEMO_MAPS_AGENT_ID=agent-id@connect.cynapsa.com
-# LITELLM_API_KEY=replace-with-gateway-api-key
-```
-
-Put the gateway key in `orchestrator/.private/litellm_api_key` (mode `0600`),
-or uncomment `LITELLM_API_KEY` in `.env`. The same optional gateway overrides
-apply here. Start the agent:
-
-```sh
-./run.sh
-```
-
-Successful startup prints:
-
-```text
-demo-orchestrator ready as <agent-id>@connect.cynapsa.com
-```
-
-After the first successful enrollment, remove `CYNAPSA_TOKEN` from `.env`. Keep
-the gateway key available for every run.
-
-Default state volume: `cynapsa-demo-orchestrator-state`.
-
-## 3. Run the client
-
-In another terminal, from the repository root:
-
-```sh
-cd client
-test -f .env || cp .env.example .env
-```
-
-Set this value in `client/.env`:
-
-```dotenv
-CYNAPSA_TOKEN=replace-with-client-enrollment-token
-CYNAPSA_GITHUB_TOKEN=replace-with-github-token
-DEMO_MESH_ID=replace-with-mesh-id
-DEMO_ORCHESTRATOR_AGENT_ID=agent-id@connect.cynapsa.com
-DEMO_ORCHESTRATOR_ORIGIN=http://demo-orchestrator.local
-```
-
-Start the client:
-
-```sh
-./run.sh
-```
-
-Successful CLI login starts the HTTP app and prints an interactive prompt:
-
-```text
-demo-client ready
-Ask a question (or "quit"):
-```
-
-Ask a location question to exercise the complete path. Enter `quit` to stop the
-client. After successful enrollment, remove `CYNAPSA_TOKEN` from `.env`.
-
-Default state volume: `cynapsa-demo-client-state`.
-
-Client-only `./run.sh --quiet` hides Python diagnostic logs and startup banners;
-input, answers/citations, request failures and explicit `new` conversation IDs
-remain. `python app.py --quiet` is the direct HTTP equivalent. The runner
-forwards this through the CLI launcher for cached, fresh and forced enrollment.
-The HTTP app has no SDK event consumer. Successful build progress is captured
-privately and removed,
-while failed builds are reported and stop startup. Existing images must first
-be rebuilt with `./run.sh --build --quiet`. Normal server logs are unaffected.
-
-## Later runs and image rebuilds
-
-Each `SOURCE_DEPENDENCIES.md` explains remote provenance, BuildKit secret
-handling, image-tag differences, and why a local SDK fix may not be in a build.
-Volume selection is explicit `CYNAPSA_DEMO_<ROLE>_VOLUME`, then an existing
-ignored `.private/active-volume` pointer, then the role's default volume. The
-runner reads but does not update that pointer; it does not switch volumes for
-force-enrollment. Do not inspect or publish private state or secret contents.
-
-Run an already enrolled identity from its directory:
-
-```sh
-./run.sh
-```
-
-Fetch the current SDK and Go Core branch heads and rebuild:
-
-```sh
-./run.sh --build
-```
-
-After an identity has been removed from its mesh and re-added, place its
-still-valid enrollment token in that directory's `.env` and run
-`./run.sh --force-enroll`. The entrypoint invokes the built-in
-`cynapsa run --force-enroll` with the token from a private file. For the client
-and files agent, the CLI then runs the HTTP program within that session; the
-native agents retain their own startup path. No launcher switches volumes. Stop
-the old container first. If a grant expired or was revoked independently,
-obtain a new grant.
-The fetched SDK includes force-enroll and mapped HTTP error handling.
-After the SDK/Core branch changes, use `./run.sh --build` and restart
-any running container; an existing container keeps its original image.
-
-## Test another enrollment token
-
-A saved profile takes precedence over a new token. To test another identity or
-installation without destroying existing state, use a different volume name:
-
-```sh
-CYNAPSA_TOKEN='another-token' \
-  CYNAPSA_DEMO_CLIENT_VOLUME=cynapsa-demo-client-test-2 \
-  ./client/run.sh
-```
-
-Equivalent volume variables are:
-
-- `CYNAPSA_DEMO_CLIENT_VOLUME`
-- `CYNAPSA_DEMO_ORCHESTRATOR_VOLUME`
-- `CYNAPSA_DEMO_MAPS_VOLUME`
-
-Reuse the same volume name on later runs for that installation.
-
-## Stop and reset
-
-Press `Ctrl-C` to stop an entity. The container is removed automatically, but
-its encrypted Cynapsa installation remains in the named Docker volume.
-
-Deleting a state volume permanently removes that local installation state. For
-example:
-
-```sh
-docker volume rm cynapsa-demo-client-state
-```
-
-Do this only when the installation should be discarded. A subsequent run needs
-an active enrollment grant with capacity for a new installation.
-
-## Expected failure signals
-
-The two native agents own one SDK `next_event()` consumer for console alerts.
-It runs in a background thread in Maps and an async task in the orchestrator,
-separately from handlers and user input. Do not add another
-competing `next_event()` consumer without event fan-out.
-Connectivity and SDK lifecycle transitions print an `ALERT`; canonical
-`core.error` events print their real code, stage, retryability, source and
-message. Connectivity is normalized Core health, not per-peer reachability
-or a precise server-side reason. Do not label every disconnect as revocation.
-Observers stop before intentional session teardown; disconnects do not
-automatically terminate these application processes.
-Alerts are best-effort observations on bounded SDK queues, not a durable
-audit log or an authorization/keepalive mechanism.
-The two native directories own identical `rpc_logging.py` helpers. Main
-configures external HTTP libraries at WARNING, retaining error diagnostics.
-Native outgoing calls use `request_sync`/`request_async`; handlers apply
-`@log_handler` underneath `@session.on`, preserving async classification.
-The client and files directories are plain HTTP apps and have no SDK event
-consumer. The client logs its virtual URL, question and HTTP response; files
-logs its question and response body through FastAPI.
-Traffic INFO records are simple request/response lines with full message
-content (no redaction or truncation); headers are not logged. Keep sensitive
-data out of demo requests because cloud logs retain it. Friendly peer names
-are resolved only by exact bare-ID matches against the `DEMO_*_AGENT_ID`
-environment variables; unknown peers show their full ID. Set
-`DEMO_CLIENT_AGENT_ID` on the orchestrator and
-`DEMO_ORCHESTRATOR_AGENT_ID` on maps/files to label inbound peers. `request
-sent` means SDK submission, not delivery; `response returned` precedes SDK
-validation/transmission. MSG logs only the incoming request. Failures re-raise
-the original exception.
-No additional `next_event()` consumer is created. The native helpers must stay
-identical while every directory stays independently runnable. Rebuild and redeploy to
-change cloud logging; source edits never modify an existing container.
-The Core connectivity-event producer must be included in the fetched Core
-revision before a GitHub-built image can show live connection transitions.
-
-- `Docker is required`: install Docker.
-- `Docker is not running`: start the Docker engine.
-- `an enrollment token is required`: the selected volume has no profile and
-  `CYNAPSA_TOKEN` was not supplied.
-- Enrollment rejected: obtain a fresh token for the intended identity and mesh.
-- Unauthorized RPC: confirm every identity belongs to the same mesh and that
-  target IDs are canonical bare agent IDs.
-- Model or Places errors: confirm the runtime API-key variables are present and
-  the required Google APIs are enabled.
-
-## Application and delivery bounds
-
-All three servers use independent LangGraph `StateGraph` workflows; all remote
-tools remain native Cynapsa RPCs. The client has no graph. `/ask` carries a
-client-selected `conversation_id`, isolated by authenticated sender/mesh and
-the orchestrator's canonical identity. Async SQLite checkpoints persist in
-the orchestrator volume (`conversations.sqlite`, 0600; not encrypted). The
-model context is the last eight successful turn pairs, with remembered answer
-text capped at 4,000 characters. Failed turns do not enter successful history.
-Checkpoint disk retention is unbounded; protect this private volume.
-Cloud deployments may set `DEMO_MEMORY_DIRECTORY` to a private local filesystem
-separate from persistent credentials; chat memory then resets on replacement.
-Do not put the live SQLite WAL database on NFS/EFS.
-One process owns it and serializes turns; no distributed/shared-volume memory.
-The async native SDK dispatches handlers on the session's creating loop.
-That loop owns the shared graph and saver and must remain running until async
-session teardown completes. Synchronous handlers remain on worker threads.
-Do not create a new loop per request around these shared async resources.
-These local application checkpoints are unrelated to removed mesh snapshots.
-The client prints a conversation ID, accepts `new`, and uses optional
-`DEMO_CONVERSATION_ID` to resume a chat after restart. Read each entity's README
-for the memory contract. No extra server endpoint or direct HTTP link is added.
-
-Maps uses at most three model rounds and ten tool calls per round. The first
-round must call a tool; details IDs must come from a previous search. Invalid
-tools return 502 `maps_tool_error`, unfinished answers `maps_no_answer`, Places
-failure `places_unavailable`, and model failure 503 `model_unavailable`.
-Orchestrator loops reason -> agent_tools -> reason and permits at most four
-maps/files calls per turn, including sequential execution of validated batches.
-Both tools remain available after each result; at the call limit one final
-completion disables tools. Extra calls are rejected and not sent. Both agents'
-citations are retained, and only the finalized answer enters successful memory.
-There is no automatic retry of a failed chain. Its bad
-input, timeout and model failures are 400/504/503 respectively; downstream
-native/remote failures become generic 502 `orchestrator_failed`. Its terminal
-logs include canonical downstream details and traces; keep them private.
-
-Source: entity `app.py`, agent `llm.py` and `runtime.py`, and `maps/places.py`. Model and
-Places HTTP timeouts (25/10 seconds) are not a total request deadline. Maps RPC
-TTL is 100,000 ms, client `/ask` TTL 140,000 ms, and session RPC timeout option
-110,000 ms; these distinct limits do not prove every allowed tool chain finishes.
-
-Use canonical bare destination JIDs, not friendly aliases/portal UUIDs. The
-authority resolves a full exact-session JID. No active target is unavailable;
-mesh/organization mismatch is forbidden. Peer revoke application needs its
-separate 30-second action ACK. Stream resume can replay an exact pending queue,
-but final expiry has no mailbox/reroute and accepted sends are not custody
-receipts. Local mock checks do not prove remote builds or live delivery.
-
-## Local async-dispatch regression
-
-`tests/test_sdk_graph_dispatch.py` exercises real SDK inbound workers with
-real LangGraph/SQLite memory. Ingress, acceptance/reply transport, model, and
-remote Maps RPC are fake; no credentials or live services are used. Install
-the intended SDK or select its source checkout explicitly:
-
-```sh
-PYTHONPATH=/path/to/cynapsa-python-sdk/src .venv/bin/python -m pytest -q
-```
-
-Without the SDK installed, this dispatch test skips. Other mock-session tests
-are not a substitute. The test forces saver-lock contention, repeated turns,
-the remote-tool path, concurrent arrivals, and worker teardown.
-
-## Optional fourth identity: files
-
-Follow `files/README.md`. This directory is independently runnable and uses the
-same GitHub-backed SDK/Core build and genuine force-enroll flow. Create its
-identity in the mesh, configure `.env` with `CYNAPSA_TOKEN`, `DEMO_MESH_ID`,
-`CYNAPSA_GITHUB_TOKEN`, `LITELLM_API_KEY` and absolute `DEMO_FILES_DIRECTORY`.
-The runner mounts only that directory read-only at `/data`; the image never
-includes database content. Get its bare JID from the portal's identity page
-and add it as `DEMO_FILES_AGENT_ID`
-in orchestrator `.env`. Start files/maps, then orchestrator, then client.
-Without that destination the orchestrator retains its original toolset.
-
-Tools are list/search/read for bounded UTF-8 `.txt/.md/.csv/.json` files; no
-symlinks, hidden files, path escape, write tools, PDF, or vector database.
-The files graph is local. The orchestrator sends native Cynapsa RPCs; the
-CLI's FastAPI hook delivers them to the files app as HTTP POST `/files`, not
-as shared graph objects or an inter-agent HTTP socket.
-Sources contain relative paths/lines/excerpts; no evidence forces not-found.
-Documents are untrusted data. Excerpts leave the machine for the model and
-orchestrator. All authorized mesh callers share access to this directory.
-Use only a dedicated database, not secrets or a broad home-directory mount.
-The files event observer owns one `next_event()` consumer like maps.
-The orchestrator can chain Files -> Maps -> answer in one turn within its
-four-call budget. Pass only the needed location/context to Maps, not whole
-private documents. Per-call RPC/model timeouts do not imply a total deadline;
-the existing 140-second client TTL can expire during a slow chain.
-Credential-free tests in `tests/test_files_agent.py` cover boundaries, limits,
-tool reasoning and orchestrator routing; they do not certify live networking.
-`tests/test_orchestrator_chaining.py` additionally verifies Files -> Maps,
-source retention, bounded calls, invalid-batch rejection before RPCs, and
-failed-chain memory isolation using deterministic fake model/RPC fixtures.
+All four applications use ordinary HTTP libraries and have no `cynapsa`
+imports. Maps and Orchestrator generate a non-secret Cynapsa JSON config from
+their environment and default to `cynapsa run --config ... -- app:app`. The
+CLI enrolls or loads an installation, maps outbound HTTP origins to bare
+agent IDs, and drives the FastAPI lifespan directly without an HTTP listener.
+Files still uses socketless Uvicorn through the CLI. Inter-agent traffic is
+Cynapsa RPC even though application code uses HTTP request/response objects.
+Maps and Orchestrator accept one of two exact `DEMO_RUN_COMMAND` values:
+the Cynapsa command above or `uvicorn app:app --host 127.0.0.1 --port 8000
+--no-access-log`. The latter is ordinary HTTP bound to container loopback,
+not publicly reachable. An explicit trusted image command remains possible.
+
+Start Maps and optional Files first, then Orchestrator, then Client. Do not
+run two containers with the same saved installation profile concurrently.
+Each identity must be in the same mesh. Only destination IDs are configured:
+enrollment supplies each process's own identity.
+
+## Prerequisites and secrets
+
+- Docker Engine with Buildx and network access to GitHub, base-image registries,
+  Go modules, and Python packages.
+- `CYNAPSA_GITHUB_TOKEN` with read access to the SDK/Core repositories in each
+  entity's ignored `.env` for image builds. BuildKit uses it only as a secret;
+  the runner excludes it from the runtime environment.
+- A valid enrollment grant for each new installation, scoped to the mesh;
+  a saved encrypted profile lives in a named Docker volume.
+- LiteLLM API key for the three servers, Google Places API key for Maps, and
+  an absolute read-only document directory for Files.
+
+Copy each `<entity>/.env.example` to `<entity>/.env` and fill only that entity's
+settings. Use its ignored `.private/litellm_api_key` (mode 0600) or
+`LITELLM_API_KEY` in `.env`. Never put keys into code or image layers. After
+successful enrollment, the original `CYNAPSA_TOKEN` may be removed from
+`.env`; keep model/Places keys available on every run. If mesh removal revoked
+an installation, rejoin the mesh and run `./run.sh --force-enroll` with a
+still-valid token in the same volume. Stop the old process first.
+
+## Local run
+
+From separate terminals, use `./run.sh` inside the required directories in
+the order above. Maps needs `DEMO_MESH_ID`, model/Places keys. Orchestrator
+also needs `DEMO_MAPS_AGENT_ID`; set optional `DEMO_FILES_AGENT_ID` to enable
+the Files tool. Files needs `DEMO_FILES_DIRECTORY`; the runner mounts only
+that directory read-only. Client needs `DEMO_ORCHESTRATOR_AGENT_ID`; it accepts
+`./run.sh --quiet`. These are canonical **bare** Cynapsa IDs obtained from
+the portal's identity page, not friendly display names. A distinct named
+volume may be selected with `CYNAPSA_DEMO_<ROLE>_VOLUME`.
+
+`./run.sh --build` refetches remote SDK/Core heads. A push or local source
+change does not update an existing image/container. Current cloud images are
+not changed by edits in this repository. Rebuild and redeploy separately.
+
+## HTTP app and memory contract
+
+Maps accepts POST `/maps` (and the wildcard POST handler) with a JSON
+`question`. Files accepts POST `/files`. Orchestrator accepts POST `/ask`
+with `prompt` and optional `conversation_id`. Its HTTPX calls use virtual
+origins `http://demo-maps.local` and `http://demo-files.local`; the CLI maps
+each to a destination ID. Without Cynapsa, those origins can be overridden
+via `DEMO_MAPS_ORIGIN` and `DEMO_FILES_ORIGIN` to ordinary reachable HTTP
+servers. Client calls `http://demo-orchestrator.local/ask` through its map.
+
+Orchestrator checkpoints LangGraph conversations in a private 0700 directory
+with a 0600 SQLite file. By default this is `/var/lib/cynapsa` in the local
+state volume; `DEMO_MEMORY_DIRECTORY` may override it (e.g. task-local disk
+separate from EFS). Do not share a live SQLite WAL database across replicas.
+Conversation keys include mesh, sender, and conversation ID. The CLI's ASGI
+bridge supplies authenticated sender in `request.state.cynapsa_sender`; the
+app falls back to HTTP client address in direct HTTP mode. Direct HTTP mode
+does not authenticate callers: do not expose it publicly without an auth
+layer. The client can enter `new` to start a fresh conversation.
+
+These demo apps log full question/answer bodies without redaction. Do not use
+private content if cloud log retention is inappropriate. External model and
+Places HTTP request logs are reduced to WARNING. Native SDK event observers
+were removed with the native handler paths; the CLI handles transport lifecycle.
+
+## Delivery and failures
+
+All remote calls are RPC; direct HTTP calls remain ordinary HTTP. Server-side
+authorization controls Cynapsa communication. Canonical HTTP errors from
+FastAPI are projected by the CLI to mapped HTTP callers. Orchestrator logs
+downstream failures and returns a generic 502 to the client; invalid input is
+400, downstream timeout 504, and model failure 503. Maps returns 400 for bad
+questions, 502 for tool/Places failures, and 503 for model unavailability.
+The demo does not guarantee a multi-tool chain finishes within the client's
+140-second timeout. An accepted send is not a delivery receipt.
+
+Run credential-free checks from the repository root with
+`.venv/bin/python -m pytest -q`. These mock HTTP, model, and Places calls;
+they do not prove live mesh delivery. Use the entity READMEs for endpoint
+details and the `SOURCE_DEPENDENCIES.md` files for build provenance.

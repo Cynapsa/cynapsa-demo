@@ -23,8 +23,6 @@ class NoLocalPolicyTests(unittest.TestCase):
     def test_launch_scripts_have_no_local_policy(self) -> None:
         for role in ROLES:
             scripts = ("run.sh", "entrypoint.sh")
-            if role in ("maps", "orchestrator"):
-                scripts += ("bootstrap.py",)
             for name in scripts:
                 with self.subTest(role=role, name=name):
                     self.assert_no_local_policy(ROOT / role / name)

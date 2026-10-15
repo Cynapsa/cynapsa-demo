@@ -7,8 +7,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PRIVATE = Path(os.environ.get("DEMO_PRIVATE_DIRECTORY", ROOT / ".private"))
-STATE = Path(os.environ.get("CYNAPSA_STATE_DIRECTORY", ROOT / ".state"))
-CORE_LIBRARY = Path(os.environ.get("CYNAPSA_CORE_LIBRARY", ROOT / "libcynapsacore.so"))
 
 
 def _secure_file(name: str) -> str:
@@ -29,44 +27,9 @@ def _secure_file(name: str) -> str:
     return value
 
 
-def _required_environment(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise RuntimeError(f"{name} is required")
-    return value
-
-
-def prepare_runtime() -> None:
-    info = STATE.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise RuntimeError("state directory must be owned by the current user")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise RuntimeError("state directory must have mode 0700")
-    if not CORE_LIBRARY.is_file():
-        raise RuntimeError(f"Go Core shared library not found at {CORE_LIBRARY}")
-    os.environ["CYNAPSA_CORE_LIBRARY"] = str(CORE_LIBRARY.resolve())
-    os.environ["CYNAPSA_STATE_DIRECTORY"] = str(STATE.resolve())
-
-
 def litellm_key() -> str:
     return _secure_file("litellm_api_key")
 
 
 def google_maps_key() -> str:
     return _secure_file("google_maps_api_key")
-
-
-def connection_options(*, enroll: bool, force_enroll: bool = False) -> dict[str, str | int | bool]:
-    if force_enroll and not enroll:
-        raise RuntimeError("force enrollment requires an enrollment token")
-    mesh_id = _required_environment("DEMO_MESH_ID")
-    options: dict[str, str | int | bool] = {
-        "mesh_id": mesh_id,
-        "profile_id": "demo-maps",
-        "rpc_timeout_ms": 110_000,
-    }
-    if enroll:
-        options["enrollment_token"] = _secure_file("enrollment_token")
-    if force_enroll:
-        options["force_enroll"] = True
-    return options

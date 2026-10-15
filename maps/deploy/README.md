@@ -1,5 +1,8 @@
 # GCP Maps deployment
 
+Historical deployment record: the image/revisions below predate this branch's
+HTTP-app/CLI conversion. Editing this repository does not update the worker pool.
+
 Updated 2026-10-11: project `aztm-amesh`, region `us-central1`, worker pool
 `cynapsa-demo-maps`, one instance. Ready revision `cynapsa-demo-maps-00011-mxz`.
 

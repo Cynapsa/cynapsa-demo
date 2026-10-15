@@ -3,45 +3,19 @@
 from __future__ import annotations
 
 import os
-import importlib.util
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLES = ("client", "maps", "orchestrator", "files")
-NATIVE_ROLES = ("maps", "orchestrator")
+HTTP_SERVER_ROLES = ("maps", "orchestrator")
 
 
 class ForceEnrollTests(unittest.TestCase):
-    def test_runtime_passes_native_force_option(self) -> None:
-        for role in NATIVE_ROLES:
-            with self.subTest(role=role), tempfile.TemporaryDirectory(dir=ROOT) as scratch:
-                spec = importlib.util.spec_from_file_location(
-                    f"demo_{role}_runtime", ROOT / role / "runtime.py"
-                )
-                self.assertIsNotNone(spec)
-                self.assertIsNotNone(spec.loader)
-                runtime = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(runtime)
-                private = Path(scratch) / "private"
-                private.mkdir(mode=0o700)
-                token_file = private / "enrollment_token"
-                token_file.write_text("test-only-token", encoding="utf-8")
-                token_file.chmod(0o600)
-                with patch.object(runtime, "PRIVATE", private), patch.dict(
-                    os.environ, {"DEMO_MESH_ID": "test-mesh"}
-                ):
-                    options = runtime.connection_options(enroll=True, force_enroll=True)
-                    self.assertTrue(options["force_enroll"])
-                    self.assertIn("enrollment_token", options)
-                    self.assertNotIn("force_enroll", runtime.connection_options(enroll=False))
-                    with self.assertRaisesRegex(RuntimeError, "requires an enrollment token"):
-                        runtime.connection_options(enroll=False, force_enroll=True)
-
     def test_runner_keeps_selected_volume(self) -> None:
         for role in ROLES:
             with self.subTest(role=role), tempfile.TemporaryDirectory(dir=ROOT) as scratch:
@@ -124,22 +98,15 @@ class ForceEnrollTests(unittest.TestCase):
                     log.read_text(encoding="utf-8"),
                 )
 
-    def test_entrypoint_runs_cli_force_enroll_before_native_app(self) -> None:
-        for role in NATIVE_ROLES:
+    def test_entrypoint_runs_direct_asgi_inside_cli(self) -> None:
+        for role in HTTP_SERVER_ROLES:
             with self.subTest(role=role), tempfile.TemporaryDirectory(dir=ROOT) as scratch:
                 scratch_path = Path(scratch)
                 state = scratch_path / "state"
                 state.mkdir()
                 (state / "profile-v2-test.state").write_text("placeholder", encoding="utf-8")
-                fake_python = scratch_path / "python"
-                log = scratch_path / "python.log"
                 fake_cynapsa = scratch_path / "cynapsa"
                 cli_log = scratch_path / "cynapsa.log"
-                fake_python.write_text(
-                    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PYTHON_LOG"\n',
-                    encoding="utf-8",
-                )
-                fake_python.chmod(0o755)
                 fake_cynapsa.write_text(
                     '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CYNAPSA_LOG"\n'
                     '[ "${TEST_CLI_FAIL:-}" != 1 ] || exit 42\n',
@@ -148,16 +115,18 @@ class ForceEnrollTests(unittest.TestCase):
                 fake_cynapsa.chmod(0o755)
                 env = os.environ.copy()
                 env.pop("CYNAPSA_TOKEN", None)
+                env.pop("DEMO_RUN_COMMAND", None)
                 env.update({
                     "PATH": f"{scratch}{os.pathsep}{env['PATH']}",
                     "CYNAPSA_STATE_DIRECTORY": str(state),
                     "DEMO_PRIVATE_DIRECTORY": str(scratch_path / "private"),
                     "DEMO_SECRET_SOURCE_DIRECTORY": str(scratch_path / "secrets"),
-                    "PYTHON_LOG": str(log),
                     "CYNAPSA_LOG": str(cli_log),
                     "DEMO_MESH_ID": "test-mesh",
                     "DEMO_FORCE_ENROLL": "1",
                 })
+                if role == "orchestrator":
+                    env["DEMO_MAPS_AGENT_ID"] = "maps@example.test"
                 if role != "client":
                     env["LITELLM_API_KEY"] = "test-only-key"
                 if role == "maps":
@@ -166,25 +135,57 @@ class ForceEnrollTests(unittest.TestCase):
                 missing = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
                 self.assertEqual(missing.returncode, 78)
                 self.assertIn("an enrollment token is required", missing.stderr)
-                self.assertFalse(log.exists())
                 self.assertFalse(cli_log.exists())
                 env["CYNAPSA_TOKEN"] = "test-only-token"
                 forced = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
                 self.assertEqual(forced.returncode, 0, forced.stderr)
-                self.assertEqual(log.read_text(encoding="utf-8").strip(), "/app/app.py")
                 token_file = scratch_path / "private" / "enrollment_token"
-                self.assertEqual(
-                    cli_log.read_text(encoding="utf-8").strip(),
-                    f"run --mesh-id test-mesh --profile-id demo-{role} "
-                    f"--token-file {token_file} --force-enroll -- python /app/bootstrap.py",
-                )
-                self.assertFalse(token_file.exists())
+                config_file = scratch_path / "private" / "cynapsa.json"
+                command = cli_log.read_text(encoding="utf-8").strip()
+                self.assertEqual(command, f"run --config {config_file} -- app:app")
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+                self.assertEqual(config["token_file"], str(token_file))
+                self.assertTrue(config["force_enroll"])
+                self.assertEqual(config["mesh_id"], "test-mesh")
+                if role == "orchestrator":
+                    self.assertEqual(config["map"], [{
+                        "origin": "http://demo-maps.local",
+                        "recipient": "maps@example.test",
+                        "mode": "rpc",
+                    }])
 
-                log.unlink()
+                    env["DEMO_FILES_AGENT_ID"] = "files@example.test"
+                    with_files = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
+                    self.assertEqual(with_files.returncode, 0, with_files.stderr)
+                    self.assertEqual(len(json.loads(config_file.read_text())["map"]), 2)
+
                 env["TEST_CLI_FAIL"] = "1"
                 rejected = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
                 self.assertEqual(rejected.returncode, 42, rejected.stderr)
-                self.assertFalse(log.exists(), "native app must not start after CLI failure")
+
+                # A trusted image-command override still works.
+                direct = subprocess.run(entrypoint + ["true"], env=env, capture_output=True, text=True)
+                self.assertEqual(direct.returncode, 0, direct.stderr)
+
+                # Cloud environments select one of two visible, exact commands;
+                # the HTTP variant stays bound to loopback.
+                uvicorn_log = scratch_path / "uvicorn.log"
+                fake_uvicorn = scratch_path / "uvicorn"
+                fake_uvicorn.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$UVICORN_LOG"\n')
+                fake_uvicorn.chmod(0o755)
+                env["UVICORN_LOG"] = str(uvicorn_log)
+                env["DEMO_RUN_COMMAND"] = (
+                    "uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log"
+                )
+                http = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
+                self.assertEqual(http.returncode, 0, http.stderr)
+                self.assertEqual(
+                    uvicorn_log.read_text().strip(),
+                    "app:app --host 127.0.0.1 --port 8000 --no-access-log",
+                )
+                env["DEMO_RUN_COMMAND"] = "sh -c dangerous"
+                unsupported = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
+                self.assertEqual(unsupported.returncode, 64)
 
     def test_files_entrypoint_runs_http_app_through_cli(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as scratch:

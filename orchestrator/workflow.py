@@ -72,7 +72,7 @@ class ChatState(TypedDict):
 
 
 def thread_key(owner: str, mesh: str, sender: str, conversation: str) -> str:
-    """Only authenticated SDK metadata supplies owner/mesh/sender, never JSON."""
+    """Hash server-side owner, mesh and transport-provided sender with the chat ID."""
     if not all(isinstance(value, str) and value for value in (owner, mesh, sender, conversation)):
         raise ValueError("authenticated conversation identity is required")
     value = json.dumps([owner, mesh, sender, conversation], ensure_ascii=True)

@@ -34,6 +34,15 @@ has no public endpoint or Direct VPC ingress, so external clients cannot reach
 it. The default is the
 full Cynapsa command above. Only these two exact values are accepted.
 
+The same image can run as a Cloud Run **service** on port 8000. In HTTP mode,
+Uvicorn serves `/maps`. In Cynapsa mode, the app stays socketless, while a
+minimal listener serves only `GET /health` so Cloud Run can start the service;
+all other HTTP paths return 404. Keep one instance and disable CPU throttling
+so the mesh session can run between HTTP requests. Do not run the old worker
+pool in Cynapsa mode at the same time with the same installation credentials.
+The Cloud Run service URL is the real `DEMO_MAPS_ORIGIN` for the orchestrator
+in *both* modes; the CLI maps that same URL to the Maps agent ID.
+
 ## Bounds and logs
 
 The model has at most three rounds and ten tool calls per round. The first

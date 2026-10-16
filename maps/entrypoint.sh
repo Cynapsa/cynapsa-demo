@@ -79,4 +79,10 @@ fi
 unset CYNAPSA_TOKEN
 python3 "$(dirname "$0")/make_config.py" "$private_directory/cynapsa.json"
 export DEMO_TRANSPORT=cynapsa
+# A Cloud Run service requires an ingress listener even though Cynapsa's ASGI
+# bridge intentionally opens no app socket. Only /health is served here; the
+# actual Maps API remains inaccessible over HTTP in this mode.
+if [ -n "${K_SERVICE:-}" ]; then
+  python3 /app/cloud_run_listener.py &
+fi
 exec cynapsa run --config "$private_directory/cynapsa.json" -- app:app

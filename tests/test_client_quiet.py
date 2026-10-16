@@ -29,6 +29,29 @@ def test_client_app_has_no_cynapsa_import_or_native_session() -> None:
     assert "requests.post" in source
 
 
+def test_client_entrypoint_can_run_the_same_app_as_plain_http(tmp_path):
+    python = tmp_path / "python"
+    log = tmp_path / "python.log"
+    python.write_text('#!/bin/sh\nprintf "%s|%s|%s\n" "$*" "$DEMO_TRANSPORT" "${CYNAPSA_TOKEN-unset}" > "$TEST_LOG"\n')
+    python.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+           "TEST_LOG": str(log), "DEMO_RUN_COMMAND": "python /app/app.py",
+           "CYNAPSA_TOKEN": "test-only-token", "DEMO_CLIENT_QUIET": "1"}
+    env.pop("DEMO_ORCHESTRATOR_AGENT_ID", None)
+    result = subprocess.run(["/bin/sh", str(ROOT / "client/entrypoint.sh")],
+                            env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().strip() == "/app/app.py --quiet|http|unset"
+
+
+def test_client_entrypoint_rejects_unknown_command(tmp_path):
+    env = {**os.environ, "DEMO_RUN_COMMAND": "sh -c unexpected"}
+    result = subprocess.run(["/bin/sh", str(ROOT / "client/entrypoint.sh")],
+                            env=env, text=True, capture_output=True)
+    assert result.returncode == 64
+    assert "unsupported DEMO_RUN_COMMAND" in result.stderr
+
+
 @pytest.mark.parametrize("enrollment", ["cached", "fresh", "force"])
 @pytest.mark.parametrize("origin", [None, "https://orchestrator.example.test"])
 def test_entrypoint_forwards_quiet_in_all_login_paths(tmp_path, enrollment, origin):

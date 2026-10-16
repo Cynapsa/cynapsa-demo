@@ -54,6 +54,15 @@ installation profile in the
 `cynapsa-demo-client-state` Docker volume. Remove `CYNAPSA_TOKEN` from `.env`
 after enrollment.
 
+To compare plain HTTP with Cynapsa, set `DEMO_ORCHESTRATOR_ORIGIN` to the
+orchestrator's real HTTPS origin in `.env`. Keep this URL unchanged when
+switching modes. Use `DEMO_RUN_COMMAND=python /app/app.py` for direct HTTP or
+`DEMO_RUN_COMMAND=cynapsa run -- python /app/app.py` for Cynapsa. The CLI
+maps that exact HTTPS origin to `DEMO_ORCHESTRATOR_AGENT_ID`; the application
+source remains ordinary `requests` code. Direct HTTP requires a reachable
+orchestrator endpoint and any authentication it enforces. The old `.local`
+origin is only a virtual mapping, not a usable HTTP endpoint.
+
 After the prompt appears, ask a question such as:
 
 ```text

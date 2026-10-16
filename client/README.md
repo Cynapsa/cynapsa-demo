@@ -2,8 +2,9 @@
 
 `app.py` is an ordinary Requests program. It sends JSON to
 `DEMO_ORCHESTRATOR_ORIGIN/ask` and imports no Cynapsa package. The container
-entrypoint runs it through `cynapsa run`, which maps that HTTP origin to the
-orchestrator's bare agent ID in RPC mode. The CLI owns login and the HTTP hook.
+entrypoint can run it through `cynapsa run`, which maps that HTTP origin to the
+orchestrator's bare agent ID in RPC mode, or run it as plain HTTP. The CLI owns
+login and the HTTP hook in Cynapsa mode.
 The HTTP program does not consume SDK connection events; request failures
 remain visible at the prompt. Rebuild with `./run.sh --build` to get this code.
 
@@ -53,10 +54,23 @@ SDK/Core branches, rebuild with `./run.sh --build` and restart any running
 container; subsequent runs reuse the rebuilt image.
 
 `DEMO_MESH_ID` and `DEMO_ORCHESTRATOR_AGENT_ID` are required by the launcher.
-The optional `DEMO_ORCHESTRATOR_ORIGIN` defaults to
-`http://demo-orchestrator.local`; it is both the URL used by the HTTP app and
-the origin mapped by the launcher. This keeps the same image reusable for any
-mesh and orchestrator identity.
+Set `DEMO_ORCHESTRATOR_ORIGIN` to the orchestrator's actual reachable HTTPS
+origin. It is both the URL used by the HTTP app and the origin mapped by the
+launcher. The old `http://demo-orchestrator.local` default only works with
+Cynapsa; it is not a real HTTP address.
+
+The same `app.py` and image support two exact commands via `.env`:
+
+```sh
+DEMO_RUN_COMMAND=python /app/app.py
+# or
+DEMO_RUN_COMMAND=cynapsa run -- python /app/app.py
+```
+
+The first sends a real HTTP request to `DEMO_ORCHESTRATOR_ORIGIN/ask` and does
+not require mesh login. The second intercepts that *same URL* and maps it to
+`DEMO_ORCHESTRATOR_AGENT_ID`. It requires the mesh ID, agent ID, and an enrolled
+client. The launcher accepts only these two exact command strings.
 
 Use the complete canonical **bare** destination JID, not the friendly label or
 an installation `/r2...` address; the authority resolves the exact peer. The

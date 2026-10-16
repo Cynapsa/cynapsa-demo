@@ -14,7 +14,7 @@ Copy `.env.example` to ignored `.env`. Set `DEMO_MESH_ID`,
 new installations, the LiteLLM API key, and `CYNAPSA_GITHUB_TOKEN` for image
 builds. Set optional `DEMO_FILES_AGENT_ID` to enable the Files tool. The
 LiteLLM key may instead live in ignored `.private/litellm_api_key` with mode
-0600. Then run `./run.sh`. The CLI maps `http://demo-maps.local` to Maps's ID
+0600. Then run `./run.sh`. The CLI maps `DEMO_MAPS_ORIGIN` to Maps's ID
 and `http://demo-files.local` to Files's ID. Its generated JSON config holds
 the mesh ID, destination mappings, timeout, and optional token-file path (not
 the token). The CLI runs `app:app` directly without an HTTP listener: HTTPX
@@ -32,6 +32,13 @@ interfaces. The AWS task security group denies inbound traffic, so this HTTP
 listener is not remotely reachable. If you intentionally build
 an HTTP deployment, point `DEMO_MAPS_ORIGIN` and optional `DEMO_FILES_ORIGIN`
 at reachable HTTP servers and add real authentication before exposing it.
+
+For the deployed Maps agent, use
+`DEMO_MAPS_ORIGIN=https://cynapsa-demo-maps-service-144701547770.us-central1.run.app`
+in both modes. The CLI maps that exact URL to `DEMO_MAPS_AGENT_ID`; direct HTTP
+calls the same URL. The Cloud Run service currently requires IAM authentication,
+and `/maps` returns 404 while Cynapsa mode is selected. To make an end-to-end
+HTTP comparison, switch Maps to HTTP mode and configure access intentionally.
 
 ## Conversation memory
 

@@ -5,6 +5,21 @@ state_directory=${CYNAPSA_STATE_DIRECTORY:-/var/lib/cynapsa}
 private_directory=${DEMO_PRIVATE_DIRECTORY:-/tmp/cynapsa-private}
 secret_source=${DEMO_SECRET_SOURCE_DIRECTORY:-/run/secrets}
 origin=${DEMO_ORCHESTRATOR_ORIGIN:-http://demo-orchestrator.local}
+
+run_command=${DEMO_RUN_COMMAND:-"cynapsa run -- python /app/app.py"}
+case "$run_command" in
+  "python /app/app.py")
+    unset CYNAPSA_TOKEN
+    export DEMO_TRANSPORT=http
+    if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
+      exec python /app/app.py --quiet
+    fi
+    exec python /app/app.py
+    ;;
+  "cynapsa run -- python /app/app.py") ;;
+  *) echo "unsupported DEMO_RUN_COMMAND" >&2; exit 64 ;;
+esac
+
 : "${DEMO_ORCHESTRATOR_AGENT_ID:?DEMO_ORCHESTRATOR_AGENT_ID is required}"
 
 mkdir -p "$state_directory" "$private_directory"

@@ -83,8 +83,10 @@ Successful build output is hidden; build/startup failures remain visible.
 It can be combined with `--force-enroll` without changing credentials or volumes.
 This is a demo-client option, not a new SDK/Core flag; other agents are unchanged.
 
-Without `--quiet`, the app logs the full `/ask` request and response content
-with the HTTP origin, or a request failure. There is no
+Without `--quiet`, the container logs `[cynapsa] message sent to ...` and
+`[cynapsa] message received from ...` with the orchestrator name, identity,
+and full content, or a request failure. Running `python app.py` directly
+instead labels its actual network requests `[http]`. There is no
 redaction or truncation; do not put sensitive prompts in this demo if logs will
 be shared. Headers are not logged. The answer also prints normally. HTTP access
 logs are quiet, but warnings/errors remain. Rebuild with

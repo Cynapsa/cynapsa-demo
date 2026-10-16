@@ -55,4 +55,5 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   fi
 fi
 unset CYNAPSA_TOKEN
+export DEMO_TRANSPORT=cynapsa
 exec "$@" -- uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log

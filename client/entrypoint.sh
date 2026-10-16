@@ -39,6 +39,7 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
 fi
 
 unset CYNAPSA_TOKEN
+export DEMO_TRANSPORT=cynapsa
 if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
   exec "$@" -- python /app/app.py --quiet
 fi

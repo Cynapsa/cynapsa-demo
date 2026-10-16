@@ -52,8 +52,11 @@ the variable back to the Cynapsa command to restore mesh access. No image or
 application-code change is required for the switch, although the cloud
 platform starts a replacement task/revision.
 
-Successful model/Places HTTP access logs are suppressed. The demo deliberately
-logs full request/response content, so use only non-sensitive test data.
+Successful model/Places HTTP access logs are suppressed. Cynapsa-launched
+application messages use concise `[cynapsa] message sent/received ...` lines;
+direct HTTP mode uses `[http]`. Framework startup and warnings remain separate.
+The demo deliberately logs full request/response content, so use only
+non-sensitive test data.
 There are no native SDK handler or event-observer processes in these images.
 
 For exact configuration and security details, read [AGENTS.md](AGENTS.md) and

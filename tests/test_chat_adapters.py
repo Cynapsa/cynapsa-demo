@@ -141,6 +141,34 @@ def test_orchestrator_http_errors_are_canonical(monkeypatch):
     asyncio.run(run())
 
 
+def test_orchestrator_cynapsa_message_logs(monkeypatch, caplog):
+    async def run():
+        app = orchestrator(monkeypatch)
+        sender = "client-a@example.test"
+        monkeypatch.setenv("DEMO_TRANSPORT", "cynapsa")
+        monkeypatch.setenv("DEMO_CLIENT_AGENT_ID", sender)
+
+        class Agent:
+            async def answer(self, *_):
+                return {"answer": "ok", "maps": None, "files": None}
+
+        app.app.state.agent = Agent()
+
+        async def bridge(scope, receive, send):
+            if scope["type"] == "http":
+                scope = {**scope, "state": {"cynapsa_sender": sender}}
+            await app.app(scope, receive, send)
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=bridge), base_url="http://demo.local") as client:
+            assert (await client.post("/ask", json={"prompt": "hello"})).status_code == 200
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(run())
+    assert '[cynapsa] message received from "client (client-a@example.test)"' in caplog.text
+    assert '[cynapsa] message sent to "client (client-a@example.test)"' in caplog.text
+    assert 'HTTP request received' not in caplog.text
+
+
 def test_orchestrator_lifespan_persists_http_conversation(monkeypatch, tmp_path):
     async def run():
         monkeypatch.setenv("DEMO_MEMORY_DIRECTORY", str(tmp_path))
@@ -187,7 +215,7 @@ def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys, capl
     assert ("Conversation: resumed-chat" in output) is not quiet
     assert ("demo-client ready" in output) is not quiet
     assert "ok" in output
-    assert ("HTTP request sent to orchestrator" in caplog.text) is not quiet
+    assert ('message sent to "orchestrator"' in caplog.text) is not quiet
 
 
 def test_quiet_client_keeps_prompts_answers_and_failures(monkeypatch, capsys, caplog):

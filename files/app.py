@@ -21,7 +21,7 @@ LOG = logging.getLogger("demo.files")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     for name in ("httpx", "httpcore", "urllib3", "requests"):
         logging.getLogger(name).setLevel(logging.WARNING)
     database = FileDatabase(os.environ["DEMO_FILES_DIRECTORY"])
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.database = database
     app.state.model = model
-    LOG.info("demo-files HTTP app ready on /files")
+    LOG.info("demo-files ready on /files")
     try:
         yield
     finally:
@@ -55,7 +55,14 @@ async def files(request: Request) -> dict:
         ) from None
 
     question = question.strip()
-    LOG.info("[files] HTTP request received /files: %s", json.dumps({"question": question}))
+    sender = getattr(request.state, "cynapsa_sender", None)
+    transport = "cynapsa" if sender or os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
+    label = "orchestrator" if sender and sender in {
+        os.environ.get("DEMO_ORCHESTRATOR_AGENT_ID"), "http://demo-orchestrator.local"
+    } else sender
+    peer = f"{label} ({sender})" if label == "orchestrator" else (label or (request.client.host if request.client else "unknown"))
+    LOG.info('[%s] message received from "%s": %s', transport, peer,
+             json.dumps({"question": question}, ensure_ascii=False))
     try:
         result = await run_in_threadpool(
             answer_question, question, request.app.state.model, request.app.state.database
@@ -66,5 +73,5 @@ async def files(request: Request) -> dict:
     except Exception:
         LOG.exception("Files request failed")
         raise HTTPException(status_code=502, detail="The files agent could not answer") from None
-    LOG.info("[files] HTTP response returned /files: %s", json.dumps(result, ensure_ascii=False))
+    LOG.info('[%s] message sent to "%s": %s', transport, peer, json.dumps(result, ensure_ascii=False))
     return result

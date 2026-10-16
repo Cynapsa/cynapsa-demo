@@ -57,6 +57,7 @@ run_command=${DEMO_RUN_COMMAND:-"cynapsa run --config $private_directory/cynapsa
 case "$run_command" in
   "uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log")
     unset CYNAPSA_TOKEN
+    export DEMO_TRANSPORT=http
     exec uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log
     ;;
   "cynapsa run --config $private_directory/cynapsa.json -- app:app") ;;
@@ -77,4 +78,5 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
 fi
 unset CYNAPSA_TOKEN
 python3 "$(dirname "$0")/make_config.py" "$private_directory/cynapsa.json"
+export DEMO_TRANSPORT=cynapsa
 exec cynapsa run --config "$private_directory/cynapsa.json" -- app:app

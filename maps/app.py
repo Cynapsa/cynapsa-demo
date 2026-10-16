@@ -205,7 +205,7 @@ def answer_question(question: str, client: ModelClient, places: GooglePlaces) ->
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     for name in ("httpx", "httpcore", "urllib3", "requests"):
         logging.getLogger(name).setLevel(logging.WARNING)
     model_client = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
@@ -213,7 +213,7 @@ async def lifespan(app: FastAPI):
     app.state.model_client = model_client
     app.state.places = places
     try:
-        LOG.info("demo-maps HTTP app ready using model %s", MODEL)
+        LOG.info("demo-maps ready using model %s", MODEL)
         yield
     finally:
         places.close()
@@ -236,9 +236,13 @@ async def receive(request: Request) -> dict[str, Any]:
             400, detail={"code": "bad_request", "message": "Expected a question of 1–2000 characters"}
         ) from None
     sender = getattr(request.state, "cynapsa_sender", None)
-    label = "orchestrator" if sender and sender == os.environ.get("DEMO_ORCHESTRATOR_AGENT_ID") else sender
+    transport = "cynapsa" if sender or os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
+    label = "orchestrator" if sender and sender in {
+        os.environ.get("DEMO_ORCHESTRATOR_AGENT_ID"), "http://demo-orchestrator.local"
+    } else sender
+    peer = f"{label} ({sender})" if label == "orchestrator" else (label or (request.client.host if request.client else "unknown"))
     LOG.info('[%s] message received from "%s": %s',
-             "cynapsa" if sender else "http", label or (request.client.host if request.client else "unknown"),
+             transport, peer,
              json.dumps({"question": question}, ensure_ascii=False))
     try:
         result = await run_in_threadpool(
@@ -252,6 +256,5 @@ async def receive(request: Request) -> dict[str, Any]:
     except Exception as exc:
         LOG.warning("Maps request failed: %s", type(exc).__name__)
         raise HTTPException(502, detail={"code": "maps_unavailable", "message": "The maps agent is unavailable"}) from None
-    LOG.info('[%s] response returned to "%s": %s', "cynapsa" if sender else "http",
-             label or (request.client.host if request.client else "unknown"), json.dumps(result, ensure_ascii=False))
+    LOG.info('[%s] message sent to "%s": %s', transport, peer, json.dumps(result, ensure_ascii=False))
     return result

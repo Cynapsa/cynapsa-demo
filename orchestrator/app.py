@@ -53,7 +53,7 @@ def _memory_path() -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     for name in ("httpx", "httpcore", "urllib3", "requests"):
         logging.getLogger(name).setLevel(logging.WARNING)
     model = ModelClient(litellm_key(), base_url=BASE_URL, model=MODEL)
@@ -63,11 +63,12 @@ async def lifespan(app: FastAPI):
                 async def ask_remote(origin: str, path: str, question: str) -> dict[str, Any]:
                     name = "maps" if path == "/maps" else "files"
                     identity = os.environ.get(f"DEMO_{name.upper()}_AGENT_ID", origin)
-                    LOG.info('[cynapsa] message sent to "%s" (%s): %s',
-                             name, identity, json.dumps({"question": question}, ensure_ascii=False))
+                    transport = "cynapsa" if os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
+                    LOG.info('[%s] message sent to "%s" (%s): %s',
+                             transport, name, identity, json.dumps({"question": question}, ensure_ascii=False))
                     response = await downstream.post(origin + path, json={"question": question})
-                    LOG.info('[cynapsa] response received from "%s" (%s): %s',
-                             name, identity, response.text)
+                    LOG.info('[%s] message received from "%s" (%s): %s',
+                             transport, name, identity, response.text)
                     response.raise_for_status()
                     try:
                         result = response.json()
@@ -87,7 +88,7 @@ async def lifespan(app: FastAPI):
                     model, ask_maps, checkpointer,
                     ask_files=ask_files if FILES_ORIGIN else None,
                 )
-                LOG.info("demo-orchestrator HTTP app ready using model %s", MODEL)
+                LOG.info("demo-orchestrator ready using model %s", MODEL)
                 yield
     finally:
         model.close()
@@ -117,9 +118,13 @@ async def ask(request: Request) -> dict[str, Any]:
         ) from None
 
     sender = getattr(request.state, "cynapsa_sender", None)
-    label = "client" if sender and sender == os.environ.get("DEMO_CLIENT_AGENT_ID") else sender
+    transport = "cynapsa" if sender or os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
+    label = "client" if sender and sender in {
+        os.environ.get("DEMO_CLIENT_AGENT_ID"), os.environ.get("DEMO_CLIENT_ORIGIN")
+    } else sender
+    peer = f"{label} ({sender})" if label == "client" else (label or (request.client.host if request.client else "unknown"))
     LOG.info('[%s] message received from "%s": %s',
-             "cynapsa" if sender else "http", label or (request.client.host if request.client else "unknown"),
+             transport, peer,
              json.dumps({"prompt": body.prompt, "conversation_id": conversation_id}, ensure_ascii=False))
     try:
         answer = await request.app.state.agent.answer(body.prompt.strip(), key)
@@ -134,6 +139,5 @@ async def ask(request: Request) -> dict[str, Any]:
         LOG.exception("Orchestrator request failed: %r", exc)
         raise HTTPException(502, detail={"code": "orchestrator_failed", "message": "The demo could not answer"}) from None
     result = {**answer, "conversation_id": conversation_id}
-    LOG.info('[%s] response returned to "%s": %s', "cynapsa" if sender else "http",
-             label or (request.client.host if request.client else "unknown"), json.dumps(result, ensure_ascii=False))
+    LOG.info('[%s] message sent to "%s": %s', transport, peer, json.dumps(result, ensure_ascii=False))
     return result

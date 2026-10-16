@@ -3,6 +3,7 @@ import asyncio
 import ast
 import importlib.util
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -174,7 +175,9 @@ def test_files_app_is_plain_http_and_cli_owns_mesh_bootstrap():
     assert "uvicorn app:app" in (ROOT / "files/entrypoint.sh").read_text()
 
 
-def test_files_http_route_returns_answer_and_http_errors(monkeypatch, tmp_path):
+def test_files_http_route_returns_answer_and_http_errors(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    monkeypatch.delenv("DEMO_TRANSPORT", raising=False)
     (tmp_path / "people.txt").write_text("Guy lives at 12 Park Drive.")
     model = SimpleNamespace(complete=Mock(side_effect=[
         {"tool_calls": [call("search_files", {"query": "Guy"})]},
@@ -214,3 +217,5 @@ def test_files_http_route_returns_answer_and_http_errors(monkeypatch, tmp_path):
         assert failed.status_code == 502
         assert "private model details" not in failed.text
     model.close.assert_called_once()
+    assert '[http] message received from' in caplog.text
+    assert '[http] message sent to' in caplog.text

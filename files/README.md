@@ -65,8 +65,8 @@ failures a sanitized 502.
 The ordinary Uvicorn command specifies `0.0.0.0:8000`, but the Cynapsa CLI
 intercepts startup and disables its HTTP listener. If run without the CLI,
 Uvicorn would listen on all container interfaces; the local Docker runner
-publishes no host port. FastAPI startup prints `demo-files HTTP app ready on
-/files`; this means the app is running, not that a remote peer can reach it.
+publishes no host port. FastAPI startup prints `demo-files ready on /files`;
+this means the app is running, not that a remote peer can reach it.
 
 ## Tools and limits
 
@@ -116,8 +116,10 @@ in its volume. Real `.env`, keys, and documents must not be committed.
 
 The plain HTTP app logs the question and response content, including file
 excerpts, without redaction or truncation. Use only non-sensitive demo files.
-The ASGI bridge supplies authenticated peer metadata in request state, but this
-app does not use it to label the sender. Headers are not logged. Uvicorn access
+The ASGI bridge supplies authenticated peer metadata in request state, which
+the app uses to log `[cynapsa] message received from ...` and
+`[cynapsa] message sent to ...`. Direct HTTP mode uses `[http]` instead.
+Headers are not logged. Uvicorn access
 logs and successful LLM HTTP access logs are quiet; warnings and errors remain.
 Like the other HTTP demo entities, this app has no SDK event consumer or
 connection alerts. Rebuild with `./run.sh --build`.

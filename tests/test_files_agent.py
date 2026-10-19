@@ -217,5 +217,5 @@ def test_files_http_route_returns_answer_and_http_errors(monkeypatch, tmp_path, 
         assert failed.status_code == 502
         assert "private model details" not in failed.text
     model.close.assert_called_once()
-    assert '[http] message received from' in caplog.text
-    assert '[http] message sent to' in caplog.text
+    assert '[http] request received from' in caplog.text
+    assert '[http] response sent to' in caplog.text

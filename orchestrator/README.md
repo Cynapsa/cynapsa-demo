@@ -66,7 +66,11 @@ question. Remote calls use HTTPX with a 100-second per-call timeout; the
 Client's `/ask` timeout is 140 seconds, not a guarantee that every chain
 finishes. Invalid input returns 400, downstream timeouts 504, model failure
 503, and other failures a generic 502 to the caller. Real downstream errors
-are logged in the Orchestrator terminal. Successful model HTTP access logs
-are suppressed; full demo questions/answers are logged without redaction.
+are logged in the Orchestrator terminal. A normalized downstream
+`authorization_rejected` is shown there as one warning without a Python
+traceback; the HTTP caller still receives the demo's generic failure response.
+Unexpected exceptions retain a traceback for diagnosis. Successful model HTTP
+access logs are suppressed; full demo questions/answers are logged without
+redaction.
 
 See [source dependencies](SOURCE_DEPENDENCIES.md) for build provenance.

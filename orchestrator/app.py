@@ -171,7 +171,12 @@ async def ask(request: Request) -> dict[str, Any]:
                     exc.status_code, exc, exc_info=True)
         raise HTTPException(503, detail={"code": "model_unavailable", "message": "The model gateway is unavailable"}) from None
     except Exception as exc:
-        LOG.exception("Orchestrator request failed: %r", exc)
+        if getattr(exc, "code", None) == "authorization_rejected":
+            # The HTTP app stays independent of Cynapsa imports. A mapped
+            # request can still expose the SDK's normalized public error.
+            LOG.warning("Orchestrator downstream authorization rejected: %s", exc)
+        else:
+            LOG.exception("Orchestrator request failed: %r", exc)
         raise HTTPException(502, detail={"code": "orchestrator_failed", "message": "The demo could not answer"}) from None
     finally:
         REQUEST_ID.reset(token)

@@ -56,9 +56,11 @@ Successful model/Places HTTP access logs are suppressed. Cynapsa-launched
 application requests use concise `[cynapsa] request started/received` and
 `response received/sent` lines with a short demo request ID and elapsed time;
 CLI lifecycle outcomes (`session.authenticate`, `session.ready`,
-`session.closed`), changes in the actual `core.status` result, and confirmed
-server-authority events (`peer.authorized`, `peer.rejected`, `peer.revoked`)
-are also printed in Cynapsa ASGI mode. The eight-character demo request ID is
+`session.closed`), live `core.status` changes, and safe validated mesh events
+(including connectivity, peer authority, and message state) are also printed
+in Cynapsa ASGI mode. A disconnect can therefore appear as `degraded` and a
+terminal connection loss as `unavailable`; these network lines contain no
+request body or raw provider errors. The eight-character demo request ID is
 carried in an ordinary HTTP header through the bridge; it is not a Cynapsa
 message ID or distributed trace. No line claims a network path or remote
 delivery from local request submission. `client/run.sh --quiet` suppresses

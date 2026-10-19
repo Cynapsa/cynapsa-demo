@@ -172,6 +172,29 @@ def test_orchestrator_http_errors_are_canonical(monkeypatch):
     asyncio.run(run())
 
 
+def test_orchestrator_logs_expected_authorization_without_traceback(monkeypatch, caplog):
+    async def run():
+        app = orchestrator(monkeypatch)
+
+        class AuthorizationRejected(Exception):
+            code = "authorization_rejected"
+
+        class Agent:
+            async def answer(self, *_):
+                raise AuthorizationRejected("The requested operation is not authorized")
+
+        app.app.state.agent = Agent()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app.app), base_url="http://localhost") as client:
+            return await client.post("/ask", json={"prompt": "hello"})
+
+    with caplog.at_level(logging.WARNING):
+        response = asyncio.run(run())
+    assert response.status_code == 502
+    assert response.json()["detail"]["message"] == "The demo could not answer"
+    assert "authorization rejected: The requested operation is not authorized" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
 def test_orchestrator_cynapsa_message_logs(monkeypatch, caplog):
     async def run():
         app = orchestrator(monkeypatch)

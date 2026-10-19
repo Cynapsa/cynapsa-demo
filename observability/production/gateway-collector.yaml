@@ -1,0 +1,80 @@
+# Central ingress. Publish ONLY 4318 through an allowlisted TLS passthrough LB.
+# Never expose 8888, 9464, Tempo, Loki, or Prometheus to agent networks.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        tls:
+          cert_file: /run/otel/tls/gateway.crt
+          key_file: /run/otel/tls/gateway.key
+          client_ca_file: /run/otel/tls/agent-ca.crt
+          min_version: "1.2"
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+extensions:
+  file_storage:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    add_metric_suffixes: false
+    # Exporters retain their last OTLP snapshots for 1m after updates stop.
+    # No-data alerts account for this additional expiration delay.
+    metric_expiration: 1m
+    resource_to_telemetry_conversion:
+      enabled: true
+  otlphttp/tempo:
+    endpoint: http://tempo.internal:4318
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: 10000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0s
+  otlphttp/loki:
+    endpoint: http://loki.internal:3100/otlp
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: 10000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0s
+
+service:
+  extensions: [file_storage]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+                without_type_suffix: true
+                without_units: true
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

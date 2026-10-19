@@ -56,6 +56,7 @@ fi
 run_command=${DEMO_RUN_COMMAND:-"cynapsa run --config $private_directory/cynapsa.json -- app:app"}
 case "$run_command" in
   "uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log")
+    : "${DEMO_HTTP_ACCESS_KEY:?DEMO_HTTP_ACCESS_KEY is required for HTTP mode}"
     unset CYNAPSA_TOKEN
     export DEMO_TRANSPORT=http
     exec uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log
@@ -85,4 +86,5 @@ export DEMO_TRANSPORT=cynapsa
 if [ -n "${K_SERVICE:-}" ]; then
   python3 /app/cloud_run_listener.py &
 fi
+export CYNAPSA_CLI_NETWORK_EVENTS=1
 exec cynapsa run --config "$private_directory/cynapsa.json" -- app:app

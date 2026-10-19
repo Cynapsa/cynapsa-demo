@@ -8,7 +8,7 @@ COPY github-askpass.sh /usr/local/bin/cynapsa-git-askpass
 RUN chmod 0555 /usr/local/bin/cynapsa-git-askpass
 ARG SOURCE_REFRESH
 ARG CORE_GIT_REF=main
-ARG SDK_GIT_REF=feature/cli-operations
+ARG SDK_GIT_REF=main
 RUN --mount=type=secret,id=github_token,required=true \
     set -eu; \
     : "$SOURCE_REFRESH"; \
@@ -54,12 +54,13 @@ RUN groupadd --gid 65532 cynapsa \
 WORKDIR /app
 COPY requirements.txt ./
 COPY --from=sdk-builder /out/*.whl /tmp/wheels/
-RUN python -m pip install --no-cache-dir -r requirements.txt /tmp/wheels/*.whl \
+RUN set -- /tmp/wheels/*.whl; \
+    python -m pip install --no-cache-dir -r requirements.txt "$1[otel]" \
     && rm -rf /tmp/wheels
 
 COPY --from=core-builder /out/libcynapsacore.so /opt/cynapsa/libcynapsacore.so
 COPY --from=sources /src/source-revisions /opt/cynapsa/source-revisions
-COPY app.py entrypoint.sh ./
+COPY app.py entrypoint.sh make_config.py ./
 RUN chmod 0555 /app/entrypoint.sh /opt/cynapsa/libcynapsacore.so
 
 USER 65532:65532

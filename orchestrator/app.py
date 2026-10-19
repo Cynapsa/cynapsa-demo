@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import logging
 import os
 import stat
@@ -13,6 +14,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, Field, ValidationError
 
@@ -66,7 +68,13 @@ async def lifespan(app: FastAPI):
                     transport = "cynapsa" if os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
                     LOG.info('[%s] message sent to "%s" (%s): %s',
                              transport, name, identity, json.dumps({"question": question}, ensure_ascii=False))
-                    response = await downstream.post(origin + path, json={"question": question})
+                    headers = {}
+                    if transport == "http":
+                        key = os.environ.get("DEMO_HTTP_ACCESS_KEY", "")
+                        if not key:
+                            raise RuntimeError("DEMO_HTTP_ACCESS_KEY is required for HTTP transport")
+                        headers["x-demo-access-key"] = key
+                    response = await downstream.post(origin + path, json={"question": question}, headers=headers)
                     LOG.info('[%s] message received from "%s" (%s): %s',
                              transport, name, identity, response.text)
                     response.raise_for_status()
@@ -95,6 +103,21 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_http_demo_key(request: Request, call_next):
+    if os.environ.get("DEMO_TRANSPORT") == "http" and request.url.path != "/health":
+        expected = os.environ.get("DEMO_HTTP_ACCESS_KEY", "")
+        supplied = request.headers.get("x-demo-access-key", "")
+        if not expected or not hmac.compare_digest(supplied, expected):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/ask")

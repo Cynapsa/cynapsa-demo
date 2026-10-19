@@ -1,0 +1,139 @@
+# promtool test rules alerts.test.yml
+rule_files:
+  - alerts.yml
+  - alerts-mesh.yml
+evaluation_interval: 30s
+tests:
+  - name: positive gauge change detects a Core timeout
+    interval: 30s
+    input_series:
+      - series: 'cynapsa_core_rpc_timeout_count{job="cynapsa-core",instance="core-1"}'
+        values: '0+0x7 1+0x12'
+    promql_expr_test:
+      - expr: 'max_over_time((clamp_min(idelta(cynapsa_core_rpc_timeout_count{job="cynapsa-core"}[2m]), 0))[5m:30s]) > 0'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="cynapsa-core",instance="core-1"}'
+            value: 1
+  - name: downward gauge reset is not a positive failure
+    interval: 30s
+    input_series:
+      - series: 'cynapsa_core_rpc_timeout_count{job="cynapsa-core",instance="core-1"}'
+        values: '5+0x5 0+0x10'
+    promql_expr_test:
+      - expr: 'max_over_time((clamp_min(idelta(cynapsa_core_rpc_timeout_count{job="cynapsa-core"}[2m]), 0))[5m:30s]) > 0'
+        eval_time: 5m
+        exp_samples: []
+  - name: expected Maps role absent is not zero
+    interval: 30s
+    promql_expr_test:
+      - expr: 'absent_over_time(cynapsa_core_rpc_response_count{job="cynapsa-core",cynapsa_role="maps"}[2m])'
+        eval_time: 8m
+        exp_samples:
+          - labels: '{job="cynapsa-core",cynapsa_role="maps"}'
+            value: 1
+  - name: mesh route rejection snapshot is detected
+    interval: 30s
+    input_series:
+      - series: 'cynapsa_mesh_server_route_rejected_count{job="cynapsa-mesh-server",instance="mesh-1"}'
+        values: '0+0x7 1+0x12'
+    promql_expr_test:
+      - expr: 'max_over_time((clamp_min(idelta(cynapsa_mesh_server_route_rejected_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="cynapsa-mesh-server",instance="mesh-1"}'
+            value: 1
+  - name: mesh availability false is distinct from missing
+    interval: 30s
+    input_series:
+      - series: 'cynapsa_mesh_server_mesh_available{job="cynapsa-mesh-server",instance="mesh-1"}'
+        values: '0+0x12'
+    promql_expr_test:
+      - expr: 'cynapsa_mesh_server_mesh_available{job="cynapsa-mesh-server"} == 0'
+        eval_time: 3m
+        exp_samples:
+          - labels: 'cynapsa_mesh_server_mesh_available{job="cynapsa-mesh-server",instance="mesh-1"}'
+            value: 0
+  - name: Maps no-data waits for range and pending period
+    interval: 30s
+    input_series:
+      - series: 'cynapsa_core_rpc_response_count{job="cynapsa-core",cynapsa_role="maps",instance="core-1"}'
+        values: '1+0x3 stale'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CynapsaMapsCoreNoData
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: CynapsaMapsCoreNoData
+        exp_alerts:
+          - exp_labels:
+              job: cynapsa-core
+              cynapsa_role: maps
+              severity: critical
+            exp_annotations:
+              summary: No Core snapshot from expected Maps role
+  - name: edge enqueue failure is visible separately from producer drops
+    interval: 30s
+    input_series:
+      - series: 'otelcol_exporter_enqueue_failed_metric_points{job="otel-edge",instance="edge-1",cynapsa_role="maps",cloud_provider="gcp",exporter="otlphttp/gateway"}'
+        values: '0+0x7 4+0x8'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CynapsaEdgeExporterFailures
+        exp_alerts:
+          - exp_labels:
+              instance: edge-1
+              cynapsa_role: maps
+              cloud_provider: gcp
+              severity: warning
+            exp_annotations:
+              summary: Edge Collector failed to send or enqueue telemetry
+  - name: edge queue and disk ratios are observable
+    interval: 30s
+    input_series:
+      - series: 'otelcol_exporter_queue_size{job="otel-edge",instance="edge-1",exporter="otlphttp/gateway"}'
+        values: '9+0x12'
+      - series: 'otelcol_exporter_queue_capacity{job="otel-edge",instance="edge-1",exporter="otlphttp/gateway"}'
+        values: '10+0x12'
+      - series: 'node_filesystem_avail_bytes{job="edge-queue-disk",instance="edge-1",mountpoint="/var/lib/otelcol/queue"}'
+        values: '10+0x12'
+      - series: 'node_filesystem_size_bytes{job="edge-queue-disk",instance="edge-1",mountpoint="/var/lib/otelcol/queue"}'
+        values: '100+0x12'
+    promql_expr_test:
+      - expr: '(otelcol_exporter_queue_size{job="otel-edge"} / otelcol_exporter_queue_capacity{job="otel-edge"}) > 0.8'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="otel-edge",instance="edge-1",exporter="otlphttp/gateway"}'
+            value: 0.9
+      - expr: '(node_filesystem_avail_bytes{job="edge-queue-disk",mountpoint="/var/lib/otelcol/queue"} / node_filesystem_size_bytes{job="edge-queue-disk",mountpoint="/var/lib/otelcol/queue"}) < 0.15'
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="edge-queue-disk",instance="edge-1",mountpoint="/var/lib/otelcol/queue"}'
+            value: 0.1
+  - name: edge receiver refusal is visible
+    interval: 30s
+    input_series:
+      - series: 'otelcol_receiver_refused_spans{job="otel-edge",instance="edge-1",cynapsa_role="maps",cloud_provider="gcp",receiver="otlp"}'
+        values: '0+0x7 2+0x8'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CynapsaEdgeReceiverRefusals
+        exp_alerts:
+          - exp_labels:
+              instance: edge-1
+              cynapsa_role: maps
+              cloud_provider: gcp
+              severity: warning
+            exp_annotations:
+              summary: Edge Collector receiver refused telemetry
+  - name: healthy disk scrape without queue mount is actionable
+    interval: 30s
+    input_series:
+      - series: 'up{job="edge-queue-disk",instance="edge-1",cynapsa_role="maps",cloud_provider="gcp"}'
+        values: '1+0x12'
+    promql_expr_test:
+      - expr: 'up{job="edge-queue-disk"} == 1 unless on(instance) node_filesystem_avail_bytes{job="edge-queue-disk",mountpoint="/var/lib/otelcol/queue"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'up{job="edge-queue-disk",instance="edge-1",cynapsa_role="maps",cloud_provider="gcp"}'
+            value: 1

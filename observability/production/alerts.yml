@@ -1,0 +1,135 @@
+groups:
+  - name: cynapsa-production
+    interval: 30s
+    rules:
+      - alert: CynapsaCoreConnectivityFailures
+        expr: max_over_time((clamp_min(idelta(cynapsa_core_rpc_timeout_count{job="cynapsa-core"}[2m]), 0))[5m:30s]) > 0 or max_over_time((clamp_min(idelta(cynapsa_core_outbox_request_expired_count{job="cynapsa-core"}[2m]), 0))[5m:30s]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Core timeout or outbox expiry snapshot increased"
+          description: "At least one adjacent positive change was observed. This is not a delivery-failure rate or a proof of which peer failed."
+      - alert: CynapsaCoreTelemetryDrops
+        expr: max_over_time((clamp_min(idelta(cynapsa_core_telemetry_export_dropped_count{job="cynapsa-core"}[2m]), 0))[5m:30s]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Core telemetry export drop snapshot increased"
+      - alert: CynapsaSdkTelemetryDrops
+        expr: max_over_time((clamp_min(idelta(cynapsa_sdk_telemetry_export_dropped_count{job="cynapsa-sdk"}[2m]), 0))[5m:30s]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "SDK telemetry export drop snapshot increased"
+      - alert: CynapsaMeshServerUnavailable
+        expr: cynapsa_mesh_server_authority_ready{job="cynapsa-mesh-server"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mesh authority readiness is false"
+          description: "Adapter poll failed or returned not-ready; this does not identify root cause."
+      - alert: CynapsaMeshServerTelemetryDrops
+        expr: max_over_time((clamp_min(idelta(cynapsa_mesh_server_telemetry_export_dropped_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0 or max_over_time((clamp_min(idelta(cynapsa_mesh_server_telemetry_poll_failure_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mesh-server telemetry export or poll failure snapshot increased"
+      - alert: CynapsaMapsCoreNoData
+        expr: absent_over_time(cynapsa_core_rpc_response_count{job="cynapsa-core",cynapsa_role="maps"}[2m])
+        for: 1m
+        labels:
+          severity: critical
+          cynapsa_role: maps
+        annotations:
+          summary: "No Core snapshot from expected Maps role"
+      - alert: CynapsaOrchestratorCoreNoData
+        expr: absent_over_time(cynapsa_core_rpc_response_count{job="cynapsa-core",cynapsa_role="orchestrator"}[2m])
+        for: 1m
+        labels:
+          severity: critical
+          cynapsa_role: orchestrator
+        annotations:
+          summary: "No Core snapshot from expected Orchestrator role"
+      - alert: CynapsaMeshServerNoData
+        expr: absent_over_time(cynapsa_mesh_server_authority_ready{job="cynapsa-mesh-server"}[2m])
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No mesh-server authority readiness samples"
+      - alert: CynapsaGatewayUnavailable
+        expr: up{job="otel-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape the Collector gateway"
+      - alert: CynapsaBackendUnavailable
+        expr: up{job=~"tempo|loki"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape a telemetry backend"
+      - alert: CynapsaCollectorExportFailures
+        expr: sum by (exporter) (rate(otelcol_exporter_send_failed_spans{job="otel-gateway"}[5m])) > 0 or sum by (exporter) (rate(otelcol_exporter_send_failed_log_records{job="otel-gateway"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector export failures observed"
+      - alert: CynapsaCollectorQueueNearCapacity
+        expr: (otelcol_exporter_queue_size{job="otel-gateway"} / otelcol_exporter_queue_capacity{job="otel-gateway"}) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector persistent queue exceeds 80% of configured batch capacity"
+      - alert: CynapsaEdgeUnavailable
+        expr: up{job="otel-edge"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape an expected edge Collector"
+      - alert: CynapsaEdgeExporterFailures
+        expr: sum by (instance, cynapsa_role, cloud_provider) (rate({__name__=~"otelcol_exporter_(send_failed|enqueue_failed)_(metric_points|spans|log_records)",job="otel-edge"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge Collector failed to send or enqueue telemetry"
+      - alert: CynapsaEdgeReceiverRefusals
+        expr: sum by (instance, cynapsa_role, cloud_provider) (rate({__name__=~"otelcol_receiver_refused_(metric_points|spans|log_records)",job="otel-edge"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge Collector receiver refused telemetry"
+      - alert: CynapsaEdgeQueueNearCapacity
+        expr: (otelcol_exporter_queue_size{job="otel-edge"} / otelcol_exporter_queue_capacity{job="otel-edge"}) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge persistent queue exceeds 80% of configured batch capacity"
+      - alert: CynapsaEdgeQueueDiskLow
+        expr: (node_filesystem_avail_bytes{job="edge-queue-disk",mountpoint="/var/lib/otelcol/queue"} / node_filesystem_size_bytes{job="edge-queue-disk",mountpoint="/var/lib/otelcol/queue"}) < 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Edge queue filesystem has less than 15% available"
+          description: "Batch count is not a byte limit; check absolute headroom against peak ingest and outage duration."
+      - alert: CynapsaEdgeQueueDiskScrapeUnavailable
+        expr: up{job="edge-queue-disk"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus cannot scrape an expected edge queue-disk exporter"
+      - alert: CynapsaEdgeQueueDiskMetricsMissing
+        expr: up{job="edge-queue-disk"} == 1 unless on(instance) node_filesystem_avail_bytes{job="edge-queue-disk",mountpoint="/var/lib/otelcol/queue"}
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue mount metric missing despite healthy edge disk scrape"

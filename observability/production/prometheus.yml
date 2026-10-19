@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+  - /etc/prometheus/alerts-mesh.yml
+
+scrape_configs:
+  - job_name: cynapsa-otlp
+    honor_labels: true
+    static_configs:
+      - targets: ["gateway.internal:9464"]
+  - job_name: otel-gateway
+    static_configs:
+      - targets: ["gateway.internal:8888"]
+  - job_name: otel-edge
+    scheme: https
+    metrics_path: /collector/metrics
+    tls_config:
+      ca_file: /run/prometheus/tls/edge-scrape-ca.crt
+      cert_file: /run/prometheus/tls/edge-scrape.crt
+      key_file: /run/prometheus/tls/edge-scrape.key
+    file_sd_configs:
+      - files: [/etc/prometheus/edge-scrape-targets.yml]
+  - job_name: edge-queue-disk
+    scheme: https
+    metrics_path: /disk/metrics
+    tls_config:
+      ca_file: /run/prometheus/tls/edge-scrape-ca.crt
+      cert_file: /run/prometheus/tls/edge-scrape.crt
+      key_file: /run/prometheus/tls/edge-scrape.key
+    file_sd_configs:
+      - files: [/etc/prometheus/edge-scrape-targets.yml]
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo.internal:3200"]
+  - job_name: loki
+    static_configs:
+      - targets: ["loki.internal:3100"]
+
+# Add an alerting.alertmanagers target after the operator chooses a notifier.
+# Prometheus must run with an encrypted, backed-up persistent TSDB volume and
+# explicit --storage.tsdb.retention.time=30d and --storage.tsdb.retention.size.

@@ -1,18 +1,22 @@
 # Run the Cynapsa demo client
 
-The client runs on your laptop and reaches the orchestrator over Cynapsa.
+The client runs on your laptop and reaches the orchestrator over Cynapsa or
+ordinary HTTPS, depending on its run command.
 The orchestrator and maps agents must already be running, whether locally or
-remotely. You need Docker and a Cynapsa enrollment token. The application and
-Docker build live in this directory. The Python SDK and Go Core are fetched
-from their `main` GitHub branches during the image build.
+remotely. You need Docker; Cynapsa mode also needs a client enrollment token.
+The application and Docker build live in this directory. The Python SDK
+`main` and Go Core `main` branches are fetched from GitHub
+during the image build.
 
 ## Requirements
 
 - Git
 - Docker Desktop, running before you start the client
 - Docker Buildx/BuildKit for GitHub-backed image builds
-- A client agent in the `cynapsa-demo` mesh
-- An active enrollment token for that client agent
+- For Cynapsa mode: a client agent in the `cynapsa-demo` mesh and an active
+  enrollment token for its first login
+- For HTTP mode: access to the shared demo key in GCP Secret Manager, or the
+  key in the shell or ignored `.env`
 
 Also put `CYNAPSA_GITHUB_TOKEN` with read access to both repositories in
 the ignored `.env` for builds. The GitHub token is build-only and is not
@@ -31,9 +35,9 @@ cd client
 
 ## First run
 
-Create an ignored environment file and replace all placeholders. The mesh ID
-and orchestrator bare agent ID are required on every run; the enrollment token
-is required only for a new state volume:
+Create an ignored environment file and fill the values needed for your mode.
+The mesh ID, orchestrator bare agent ID, and enrollment token are needed only
+for Cynapsa mode; the token is needed only for a new state volume:
 
 ```sh
 cp .env.example .env
@@ -47,21 +51,40 @@ Alternatively, provide the token directly from the shell:
 CYNAPSA_TOKEN='your-enrollment-token' ./run.sh
 ```
 
-The script builds the client image from this directory, enrolls once, and
-runs an ordinary Requests program through the CLI-installed HTTP mapping.
+In Cynapsa mode, the script builds the client image from this directory,
+enrolls once, and runs an ordinary Requests program through the CLI-installed
+HTTP mapping.
 The app itself imports no Cynapsa package. The CLI saves the encrypted
 installation profile in the
 `cynapsa-demo-client-state` Docker volume. Remove `CYNAPSA_TOKEN` from `.env`
 after enrollment.
 
-To compare plain HTTP with Cynapsa, set `DEMO_ORCHESTRATOR_ORIGIN` to the
-orchestrator's real HTTPS origin in `.env`. Keep this URL unchanged when
-switching modes. Use `DEMO_RUN_COMMAND=python /app/app.py` for direct HTTP or
-`DEMO_RUN_COMMAND=cynapsa run -- python /app/app.py` for Cynapsa. The CLI
+To compare plain HTTP with Cynapsa, edit the two lines at the top of
+`run.sh`. Keep exactly one uncommented:
+
+```sh
+DEMO_RUN_COMMAND='python /app/app.py'
+# DEMO_RUN_COMMAND='cynapsa run --config /tmp/cynapsa-private/cynapsa.json -- python /app/app.py'
+```
+
+Move the `#` to the HTTP line to select Cynapsa; then run the same `./run.sh`
+command. The container generates that private `cynapsa.json` from `.env`
+on each Cynapsa start; you do not need to create it yourself. It includes
+the mesh ID, client profile, mapping, timeout, and token-file path only when
+enrollment is needed. Set `DEMO_ORCHESTRATOR_ORIGIN` to the orchestrator's real HTTPS
+origin in `.env` and keep it unchanged when switching. The CLI
 maps that exact HTTPS origin to `DEMO_ORCHESTRATOR_AGENT_ID`; the application
-source remains ordinary `requests` code. Direct HTTP requires a reachable
-orchestrator endpoint and any authentication it enforces. The old `.local`
-origin is only a virtual mapping, not a usable HTTP endpoint.
+source remains ordinary `requests` code. For the current no-Cloudflare HTTP
+demo, set `DEMO_ORCHESTRATOR_ORIGIN` to
+`https://de-4f1d206529514541bb8cb316c5b0b51e.ecs.us-east-1.on.aws` and
+supply `DEMO_HTTP_ACCESS_KEY` from the demo operator in your ignored `.env`
+or shell. If absent, the runner fetches it with `gcloud` from GCP Secret
+Manager at runtime. Never commit the key. Direct HTTP does not require mesh
+enrollment. The old `.local` origin is only a virtual mapping, not a usable
+HTTP endpoint.
+
+Automatic key lookup needs a locally authenticated `gcloud` account with
+access to the demo secret. The key itself is not stored in `run.sh`.
 
 After the prompt appears, ask a question such as:
 
@@ -92,7 +115,8 @@ For prompts and answers without diagnostic logs or startup banners:
 Rebuild once after updating to this implementation with
 `./run.sh --build --quiet`. Build failures and request failures remain visible;
 successful build output is hidden. Normal runs without `--quiet` retain logs.
-Use `./run.sh --force-enroll --quiet` if a replacement enrollment is required.
+In Cynapsa mode, use `./run.sh --force-enroll --quiet` if a replacement
+enrollment is required.
 For direct Python execution, the equivalent option is `python app.py --quiet`.
 The HTTP app has no SDK event observer. Quiet mode preserves chat citations
 and `new`.

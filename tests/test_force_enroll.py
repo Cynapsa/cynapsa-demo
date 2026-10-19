@@ -51,6 +51,7 @@ class ForceEnrollTests(unittest.TestCase):
                     "PATH": f"{scratch}{os.pathsep}{env['PATH']}",
                     "DOCKER_LOG": str(log),
                     "DEMO_FILES_DIRECTORY": scratch,
+                    "DEMO_HTTP_ACCESS_KEY": "test-only-key",
                     f"CYNAPSA_DEMO_{role.upper()}_ENV_FILE": str(demo_env),
                     f"CYNAPSA_DEMO_{role.upper()}_VOLUME": f"test-{role}-state",
                 })
@@ -109,6 +110,7 @@ class ForceEnrollTests(unittest.TestCase):
                 cli_log = scratch_path / "cynapsa.log"
                 fake_cynapsa.write_text(
                     '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CYNAPSA_LOG"\n'
+                    'printf "%s" "${CYNAPSA_CLI_NETWORK_EVENTS:-}" > "$NETWORK_LOG"\n'
                     '[ "${TEST_CLI_FAIL:-}" != 1 ] || exit 42\n',
                     encoding="utf-8",
                 )
@@ -122,6 +124,7 @@ class ForceEnrollTests(unittest.TestCase):
                     "DEMO_PRIVATE_DIRECTORY": str(scratch_path / "private"),
                     "DEMO_SECRET_SOURCE_DIRECTORY": str(scratch_path / "secrets"),
                     "CYNAPSA_LOG": str(cli_log),
+                    "NETWORK_LOG": str(scratch_path / "network.log"),
                     "DEMO_MESH_ID": "test-mesh",
                     "DEMO_FORCE_ENROLL": "1",
                 })
@@ -143,6 +146,7 @@ class ForceEnrollTests(unittest.TestCase):
                 config_file = scratch_path / "private" / "cynapsa.json"
                 command = cli_log.read_text(encoding="utf-8").strip()
                 self.assertEqual(command, f"run --config {config_file} -- app:app")
+                self.assertEqual((scratch_path / "network.log").read_text(), "1")
                 config = json.loads(config_file.read_text(encoding="utf-8"))
                 self.assertEqual(config["token_file"], str(token_file))
                 self.assertTrue(config["force_enroll"])
@@ -177,6 +181,7 @@ class ForceEnrollTests(unittest.TestCase):
                 env["DEMO_RUN_COMMAND"] = (
                     "uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log"
                 )
+                env["DEMO_HTTP_ACCESS_KEY"] = "test-only-key"
                 http = subprocess.run(entrypoint, env=env, capture_output=True, text=True)
                 self.assertEqual(http.returncode, 0, http.stderr)
                 self.assertEqual(

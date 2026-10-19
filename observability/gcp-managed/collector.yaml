@@ -1,0 +1,56 @@
+# Cloud Run worker-pool sidecar. Only the workload's network namespace can
+# reach this receiver. Do not publish port 4318 as a service ingress port.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 128
+    spike_limit_mib: 32
+  resource/gcp:
+    attributes:
+      - key: gcp.project_id
+        value: ${env:GOOGLE_CLOUD_PROJECT}
+        action: upsert
+      - key: gcp.resource_type
+        value: global
+        action: insert
+  batch:
+    timeout: 5s
+    send_batch_size: 200
+    send_batch_max_size: 200
+
+extensions:
+  googleclientauth: {}
+
+exporters:
+  otlphttp/gcp:
+    endpoint: https://telemetry.googleapis.com
+    auth:
+      authenticator: googleclientauth
+    sending_queue:
+      enabled: true
+      queue_size: 2048
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0s
+
+service:
+  extensions: [googleclientauth]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/gcp, batch]
+      exporters: [otlphttp/gcp]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/gcp, batch]
+      exporters: [otlphttp/gcp]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/gcp, batch]
+      exporters: [otlphttp/gcp]

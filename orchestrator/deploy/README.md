@@ -1,5 +1,8 @@
 # AWS orchestrator deployment
 
+For the separate public HTTPS demo service, see [ecs-express.md](ecs-express.md).
+The historical record below describes the original Cynapsa-only ECS service.
+
 Historical deployment record: the image/revisions below predate this branch's
 HTTP-app/CLI conversion. Editing this repository does not update the ECS task.
 

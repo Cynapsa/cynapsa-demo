@@ -60,6 +60,13 @@ docker_args=(
   --mount "type=volume,src=$VOLUME,dst=/var/lib/cynapsa"
   --mount "type=bind,src=$database_directory,dst=/data,readonly"
 )
+if [[ -n ${CYNAPSA_DEMO_DOCKER_NETWORK:-} ]]; then
+  docker network inspect "$CYNAPSA_DEMO_DOCKER_NETWORK" >/dev/null 2>&1 || {
+    echo "Docker network $CYNAPSA_DEMO_DOCKER_NETWORK is unavailable." >&2
+    exit 69
+  }
+  docker_args+=(--network "$CYNAPSA_DEMO_DOCKER_NETWORK")
+fi
 runtime_env=
 cleanup() {
   [[ -z "$runtime_env" ]] || rm -f -- "$runtime_env"

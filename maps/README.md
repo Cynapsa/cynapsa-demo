@@ -17,7 +17,7 @@ the image if missing and launches the app via `cynapsa run --config
 /tmp/cynapsa-private/cynapsa.json -- app:app`. Its generated JSON config
 contains the mesh ID, timeout, and optional enrollment-token file path, not
 the token itself. The CLI delivers mesh requests to FastAPI without opening
-an HTTP port. `./run.sh --build` fetches SDK `feature/cli-operations` and
+an HTTP port. `./run.sh --build` fetches SDK `main` and
 Core `main`; existing images do not
 update automatically. The encrypted installation profile remains in the
 `cynapsa-demo-maps-state` Docker volume.

@@ -2,7 +2,7 @@
 
 This working tree has four independently buildable entity directories. Do not
 commit enrollment tokens, API keys, installation profiles, document databases,
-or conversation SQLite files. Each image clones SDK `feature/cli-operations`
+or conversation SQLite files. Each image clones SDK `main`
 and Go Core `main` from GitHub at build time; unpushed source edits are not in an image.
 Record and verify `/opt/cynapsa/source-revisions` when debugging a build.
 

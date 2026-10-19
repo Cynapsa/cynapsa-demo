@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Switch modes by moving the # from one line to the other. Keep one active.
+# The Cynapsa config is generated from .env inside the container at startup.
+# DEMO_RUN_COMMAND='python /app/app.py'
+DEMO_RUN_COMMAND='cynapsa run --config /tmp/cynapsa-private/cynapsa.json -- python /app/app.py'
+export DEMO_RUN_COMMAND
+
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROLE=client
 
@@ -15,6 +21,10 @@ esac
 IMAGE=${CYNAPSA_DEMO_CLIENT_IMAGE:-cynapsa-demo-$ROLE:main-$ARCH}
 ENV_FILE=${CYNAPSA_DEMO_CLIENT_ENV_FILE:-$ROOT/.env}
 ACTIVE_VOLUME_FILE=$ROOT/.private/active-volume
+env_file_value() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  awk -v key="$1" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' "$ENV_FILE"
+}
 force_enroll=false
 build_requested=false
 quiet=false
@@ -67,13 +77,45 @@ docker_args=(
   -it
   --mount "type=volume,src=$VOLUME,dst=/var/lib/cynapsa"
 )
+if [[ -n ${CYNAPSA_DEMO_DOCKER_NETWORK:-} ]]; then
+  docker network inspect "$CYNAPSA_DEMO_DOCKER_NETWORK" >/dev/null 2>&1 || {
+    echo "Docker network $CYNAPSA_DEMO_DOCKER_NETWORK is unavailable." >&2
+    exit 69
+  }
+  docker_args+=(--network "$CYNAPSA_DEMO_DOCKER_NETWORK")
+fi
 if [[ -f "$ENV_FILE" ]]; then
   runtime_env=$(mktemp "${TMPDIR:-/tmp}/cynapsa-demo-$ROLE-runtime.XXXXXX")
   chmod 0600 "$runtime_env"
   awk '$0 !~ /^[[:space:]]*CYNAPSA_GITHUB_TOKEN=/' "$ENV_FILE" > "$runtime_env"
   docker_args+=(--env-file "$runtime_env")
 fi
-for variable in CYNAPSA_TOKEN DEMO_MESH_ID DEMO_ORCHESTRATOR_AGENT_ID DEMO_ORCHESTRATOR_ORIGIN DEMO_CONVERSATION_ID DEMO_RUN_COMMAND; do
+
+if [[ -z ${DEMO_ORCHESTRATOR_ORIGIN:-} ]]; then
+  DEMO_ORCHESTRATOR_ORIGIN=$(env_file_value DEMO_ORCHESTRATOR_ORIGIN)
+fi
+DEMO_ORCHESTRATOR_ORIGIN=${DEMO_ORCHESTRATOR_ORIGIN:-https://de-4f1d206529514541bb8cb316c5b0b51e.ecs.us-east-1.on.aws}
+export DEMO_ORCHESTRATOR_ORIGIN
+
+if [[ $DEMO_RUN_COMMAND == 'python /app/app.py' ]]; then
+  if [[ -z ${DEMO_HTTP_ACCESS_KEY:-} ]]; then
+    DEMO_HTTP_ACCESS_KEY=$(env_file_value DEMO_HTTP_ACCESS_KEY)
+  fi
+  if [[ -z ${DEMO_HTTP_ACCESS_KEY:-} || $DEMO_HTTP_ACCESS_KEY == replace-with-private-demo-key ]]; then
+    command -v gcloud >/dev/null || {
+      echo "gcloud is required to fetch the demo HTTP access key." >&2
+      exit 69
+    }
+    DEMO_HTTP_ACCESS_KEY=$(gcloud secrets versions access 2 \
+      --secret=cynapsa-demo-http-access-key --project=aztm-amesh)
+  fi
+  [[ -n $DEMO_HTTP_ACCESS_KEY ]] || {
+    echo "The demo HTTP access key is missing." >&2
+    exit 78
+  }
+  export DEMO_HTTP_ACCESS_KEY
+fi
+for variable in CYNAPSA_TOKEN DEMO_MESH_ID DEMO_ORCHESTRATOR_AGENT_ID DEMO_ORCHESTRATOR_ORIGIN DEMO_CONVERSATION_ID DEMO_RUN_COMMAND DEMO_HTTP_ACCESS_KEY; do
   [[ -z ${!variable:-} ]] || docker_args+=(--env "$variable")
 done
 

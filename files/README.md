@@ -102,7 +102,7 @@ ask about its mounted documents; there is no per-document/user access control.
 Never point this agent at your whole home directory or a secret store.
 
 The entity directory is independent: its Dockerfile
-builds SDK `feature/cli-operations` and Go Core `main` from GitHub, and includes them in the
+builds SDK `main` and Go Core `main` from GitHub, and includes them in the
 resulting image. Local unpushed SDK/Core changes are not in the image. No
 sibling files are required.
 Read `SOURCE_DEPENDENCIES.md` for provenance. `./run.sh --build` refreshes the

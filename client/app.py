@@ -55,7 +55,13 @@ def main() -> None:
                  transport, os.environ.get("DEMO_ORCHESTRATOR_AGENT_ID", url),
                  json.dumps(payload, ensure_ascii=False))
         try:
-            response = requests.post(url, json=payload, timeout=140)
+            headers = {}
+            if transport == "http":
+                key = os.environ.get("DEMO_HTTP_ACCESS_KEY", "")
+                if not key:
+                    raise RuntimeError("DEMO_HTTP_ACCESS_KEY is required for HTTP transport")
+                headers["x-demo-access-key"] = key
+            response = requests.post(url, json=payload, headers=headers, timeout=140)
             LOG.info('[%s] message received from "orchestrator" (%s): %s',
                      transport, os.environ.get("DEMO_ORCHESTRATOR_AGENT_ID", url), response.text)
             response.raise_for_status()
@@ -71,4 +77,21 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # To use Cynapsa without the CLI, uncomment this block and comment out
+    # the plain main() below. Set CYNAPSA_TOKEN for first enrollment only.
+    # import cynapsa
+    # origin = "https://de-4f1d206529514541bb8cb316c5b0b51e.ecs.us-east-1.on.aws"
+    # with cynapsa.login(
+    #     mesh_id="cynapsa_demo_cynapsa_demo",
+    #     enrollment_token=os.environ.get("CYNAPSA_TOKEN") or None,
+    #     profile_id="demo-client",
+    #     address_map={origin: {
+    #         "recipient": "cynapsa-demo.agent-4dcbded5-8c32-435a-9e43-eeb37d903e98@connect.cynapsa.com",
+    #         "mode": "rpc",
+    #     }},
+    #     rpc_timeout_ms=140000,
+    # ):
+    #     os.environ["DEMO_ORCHESTRATOR_ORIGIN"] = origin
+    #     os.environ["DEMO_TRANSPORT"] = "cynapsa"  # Skip demo's HTTP-only access key.
+    #     main()
     main()

@@ -1,0 +1,35 @@
+# Final adapter metric names, exported as process-local OTLP snapshot gauges.
+groups:
+  - name: cynapsa-planned-mesh-server
+    interval: 30s
+    rules:
+      - alert: CynapsaMeshRouteOrDeliveryRejections
+        expr: max_over_time((clamp_min(idelta(cynapsa_mesh_server_route_rejected_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0 or max_over_time((clamp_min(idelta(cynapsa_mesh_server_delivery_rejected_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mesh route or delivery rejection snapshot increased"
+          description: "A rejection was observed; it is not a delivered-message count or a root-cause classification."
+      - alert: CynapsaMeshControlFailures
+        expr: max_over_time((clamp_min(idelta(cynapsa_mesh_server_control_delivery_failed_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0 or max_over_time((clamp_min(idelta(cynapsa_mesh_server_control_packet_rejected_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0 or max_over_time((clamp_min(idelta(cynapsa_mesh_server_control_action_timeout_count{job="cynapsa-mesh-server"}[2m]), 0))[5m:30s]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mesh control failure/rejection/timeout snapshot increased"
+          description: "Packet ACK and applied-action counts are separate stages; do not equate either with end-to-end delivery."
+      - alert: CynapsaMeshMetricsUnavailable
+        expr: cynapsa_mesh_server_mesh_available{job="cynapsa-mesh-server"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mesh metrics command unavailable"
+          description: "The adapter reports that the mesh command did not return ok; individual mesh counters/gauges are omitted. This is not the same as authority readiness."
+      - alert: CynapsaMeshMetricsNoData
+        expr: absent_over_time(cynapsa_mesh_server_mesh_available{job="cynapsa-mesh-server"}[2m])
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No mesh availability samples from the expected adapter"
+          description: "Check adapter version, opt-in, export path, and scrape before interpreting this as server failure."

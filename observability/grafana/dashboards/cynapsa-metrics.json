@@ -1,0 +1,136 @@
+{
+  "uid": "cynapsa-core-sdk-metrics",
+  "title": "Cynapsa Core and SDK metrics",
+  "description": "Opt-in process-local snapshot gauges. Counts are lifetime snapshots that may reset. No data means no exported series, not zero.",
+  "tags": ["local", "cynapsa", "metrics"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Core delivery counts (lifetime snapshot, may reset)",
+      "description": "Each line is one exporter instance. Accepted send and outbox handoff are not delivery receipts. These are resettable gauge snapshots, not Prometheus counters.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_core_oneway_send_accepted_count", "legendFormat": "accepted {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_core_outbox_handoff_count", "legendFormat": "handoff {{job}}/{{instance}}" },
+        { "refId": "C", "expr": "cynapsa_core_rpc_response_count", "legendFormat": "RPC response {{job}}/{{instance}}" },
+        { "refId": "D", "expr": "cynapsa_core_rpc_timeout_count", "legendFormat": "RPC timeout {{job}}/{{instance}}" },
+        { "refId": "E", "expr": "cynapsa_core_outbox_request_expired_count", "legendFormat": "request expired {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 18, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Core telemetry drops (lifetime snapshot, may reset)",
+      "description": "Exporter queue/send failures per Core instance. This gauge is visible only after a successful subsequent export.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_core_telemetry_export_dropped_count", "instant": true, "legendFormat": "{{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "value", "graphMode": "area", "justifyMode": "auto" }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Core RPC outcomes (lifetime snapshot, may reset)",
+      "description": "Current response and timeout snapshots over time, per Core instance. A service reset can lower these gauge values.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_core_rpc_response_count", "legendFormat": "responses {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_core_rpc_timeout_count", "legendFormat": "timeouts {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "SDK failures (lifetime snapshot, may reset)",
+      "description": "Current failure snapshots over time, per SDK process. No series until SDK metrics export is enabled.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_sdk_native_handler_failed", "legendFormat": "handler {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_sdk_http_dispatch_failed", "legendFormat": "HTTP dispatch {{job}}/{{instance}}" },
+        { "refId": "C", "expr": "cynapsa_sdk_http_asgi_failed", "legendFormat": "ASGI {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "SDK native handler counts (lifetime snapshot, may reset)",
+      "description": "Resettable snapshot gauges for native handler work, per SDK process.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_sdk_native_handler_started", "legendFormat": "started {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_sdk_native_handler_finished", "legendFormat": "finished {{job}}/{{instance}}" },
+        { "refId": "C", "expr": "cynapsa_sdk_native_handler_failed", "legendFormat": "failed {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "SDK HTTP counts (lifetime snapshot, may reset)",
+      "description": "Resettable snapshot gauges. HTTP dispatch and ASGI stages are separate; do not sum them as distinct requests.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_sdk_http_dispatch_started", "legendFormat": "dispatch started {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_sdk_http_dispatch_completed", "legendFormat": "dispatch completed {{job}}/{{instance}}" },
+        { "refId": "C", "expr": "cynapsa_sdk_http_dispatch_failed", "legendFormat": "dispatch failed {{job}}/{{instance}}" },
+        { "refId": "D", "expr": "cynapsa_sdk_http_asgi_started", "legendFormat": "ASGI started {{job}}/{{instance}}" },
+        { "refId": "E", "expr": "cynapsa_sdk_http_asgi_completed", "legendFormat": "ASGI completed {{job}}/{{instance}}" },
+        { "refId": "F", "expr": "cynapsa_sdk_http_asgi_failed", "legendFormat": "ASGI failed {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "SDK drops and queue-full (lifetime snapshot, may reset)",
+      "description": "Resettable SDK gauges for telemetry export drops and queue saturation, per process. Export failures become visible after a later successful export; missing series are not zero.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_sdk_native_event_queue_full", "legendFormat": "native event {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_sdk_native_diagnostic_queue_full", "legendFormat": "diagnostic {{job}}/{{instance}}" },
+        { "refId": "C", "expr": "cynapsa_sdk_native_handler_queue_full", "legendFormat": "handler {{job}}/{{instance}}" },
+        { "refId": "D", "expr": "cynapsa_sdk_http_asgi_queue_full", "legendFormat": "ASGI {{job}}/{{instance}}" },
+        { "refId": "E", "expr": "cynapsa_sdk_telemetry_export_dropped_count", "legendFormat": "telemetry export {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "SDK queue high-water (lifetime snapshot, may reset)",
+      "description": "Maximum observed queue depth since SDK process start. These are gauges, not current queue depths.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "cynapsa_sdk_handler_queue_high_water", "legendFormat": "handler {{job}}/{{instance}}" },
+        { "refId": "B", "expr": "cynapsa_sdk_asgi_queue_high_water", "legendFormat": "ASGI {{job}}/{{instance}}" }
+      ],
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No telemetry" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    }
+  ]
+}

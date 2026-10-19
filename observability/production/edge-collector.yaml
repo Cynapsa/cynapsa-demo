@@ -1,0 +1,79 @@
+# Reference only. One Collector in each agent network namespace (or trusted host).
+# Mount TLS material and a persistent, private /var/lib/otelcol/queue volume.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+        tls:
+          cert_file: /run/otel/tls/local.crt
+          key_file: /run/otel/tls/local.key
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+  resource/identity:
+    attributes:
+      - key: cynapsa.role
+        value: ${env:CYNAPSA_ROLE}
+        action: upsert
+      - key: deployment.environment
+        value: production
+        action: upsert
+      - key: cloud.provider
+        value: ${env:CLOUD_PROVIDER}
+        action: upsert
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+extensions:
+  file_storage:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+
+exporters:
+  otlphttp/gateway:
+    endpoint: https://${env:OTEL_GATEWAY_HOST}:4318
+    tls:
+      ca_file: /run/otel/tls/gateway-ca.crt
+      cert_file: /run/otel/tls/client.crt
+      key_file: /run/otel/tls/client.key
+      min_version: "1.2"
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: 10000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [file_storage]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+                without_type_suffix: true
+                without_units: true
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity, batch]
+      exporters: [otlphttp/gateway]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity, batch]
+      exporters: [otlphttp/gateway]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/identity, batch]
+      exporters: [otlphttp/gateway]

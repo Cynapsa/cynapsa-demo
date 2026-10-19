@@ -20,7 +20,7 @@ the mesh ID, destination mappings, timeout, and optional token-file path (not
 the token). The CLI runs `app:app` directly without an HTTP listener: HTTPX
 calls cross the Cynapsa mesh; inbound `/ask` goes to FastAPI.
 
-`./run.sh --build` refreshes SDK `feature/cli-operations` and Core `main`. Existing images do not update
+`./run.sh --build` refreshes SDK `main` and Core `main`. Existing images do not update
 automatically. The installation profile persists in the
 `cynapsa-demo-orchestrator-state` Docker volume. If revoked, rejoin the mesh
 and use `./run.sh --force-enroll` with a valid token after stopping the old

@@ -26,7 +26,7 @@ processes except through explicit requests and responses.
    `CYNAPSA_GITHUB_TOKEN` with read access to the SDK/Core repos.
 2. From separate terminals, run `./run.sh` in `maps/`, optionally `files/`,
    then `orchestrator/`, then `client/`. The first run builds that entity's
-   own image. `./run.sh --build` refreshes SDK `feature/cli-operations`
+   own image. `./run.sh --build` refreshes SDK `main`
    and Go Core `main` from GitHub.
 3. Ask a question in Client; enter `new` for a fresh chat or `quit` to stop.
    `client/run.sh --quiet` keeps only prompts, answers and failures visible.
@@ -54,6 +54,10 @@ platform starts a replacement task/revision.
 
 Successful model/Places HTTP access logs are suppressed. Cynapsa-launched
 application messages use concise `[cynapsa] message sent/received ...` lines;
+CLI lifecycle outcomes (`session.authenticate`, `session.ready`,
+`session.closed`) and changes in the actual `core.status` result are also
+printed in Cynapsa mode. These are not inferred identity or mesh-verification
+events. `client/run.sh --quiet` suppresses the extra network-status stream.
 direct HTTP mode uses `[http]`. Framework startup and warnings remain separate.
 The demo deliberately logs full request/response content, so use only
 non-sensitive test data.
@@ -63,3 +67,22 @@ For exact configuration and security details, read [AGENTS.md](AGENTS.md) and
 each directory's README. Source SHAs are recorded in each built image at
 `/opt/cynapsa/source-revisions`; current cloud deployments are independent
 of this working tree.
+
+## Optional telemetry
+
+Rebuild an entity with `./run.sh --build` to include the paired Core and SDK
+`main` branches. The image's `/opt/cynapsa/source-revisions` file records
+the fetched commits. Telemetry is off by default. For live counters in a CLI-run
+process, add `--telemetry-interval 30` before `--` in its Cynapsa run command;
+this prints fixed SDK/Core snapshots to stderr every 30 seconds. The separate
+`--diagnostics` option prints diagnostic events, not counters. Native sessions
+and HTTP Bridge handles can also read `telemetry_snapshot()` and
+`core_telemetry_snapshot()` explicitly.
+
+For a local, retained metrics view, see [observability/](observability/README.md).
+It provides an opt-in Collector, Prometheus, and Grafana stack. Each demo
+`.env.example` documents the two explicit OTLP exporter settings and the
+host-shell Docker network attachment. Starting the stack alone does not turn
+on export. The demo's content-bearing application logs are **not** ingested by
+this metrics stack. Neither cloud deployment nor distributed traces are
+configured by these local steps.

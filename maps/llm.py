@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+
+LOG = logging.getLogger(__name__)
 
 
 class ModelError(Exception):
@@ -34,7 +38,7 @@ class ModelClient:
         self._client = httpx.Client(
             base_url=root + "/",
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=25.0,
+            timeout=45.0,
             transport=transport,
         )
 
@@ -56,6 +60,7 @@ class ModelClient:
         try:
             response = self._client.post("chat/completions", json=request)
         except httpx.HTTPError as exc:
+            LOG.warning("Model gateway transport failed: %s", type(exc).__name__)
             raise ModelError(None) from exc
         if response.status_code >= 400:
             raise ModelError(response.status_code)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any, TypedDict
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from langgraph.graph import END, START, StateGraph
 from starlette.concurrency import run_in_threadpool
 
@@ -221,6 +223,21 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_http_demo_key(request: Request, call_next):
+    if os.environ.get("DEMO_TRANSPORT") == "http" and request.url.path != "/health":
+        expected = os.environ.get("DEMO_HTTP_ACCESS_KEY", "")
+        supplied = request.headers.get("x-demo-access-key", "")
+        if not expected or not hmac.compare_digest(supplied, expected):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/maps")

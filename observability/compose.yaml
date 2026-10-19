@@ -1,0 +1,98 @@
+name: cynapsa-observability
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318" # OTLP/HTTP from host processes only
+    expose:
+      - "9464" # Prometheus scrape endpoint, Docker network only
+    networks:
+      - observability
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=1GB
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    expose:
+      - "9090" # Queried by Grafana on the Docker network; no host binding
+    networks:
+      - observability
+    restart: "no"
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    expose:
+      - "3200" # Grafana query endpoint, Docker network only
+      - "4318" # Collector trace export, Docker network only
+    networks:
+      - observability
+    restart: "no"
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    expose:
+      - "3100" # Grafana query and Collector log export, network only
+    networks:
+      - observability
+    restart: "no"
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in observability/.env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - observability
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    restart: "no"
+
+networks:
+  observability:
+    name: cynapsa-observability
+    driver: bridge
+    # Docker's automatic address pools can be exhausted by the e2e networks
+    # on this development host. Keep this private /24 explicit and isolated.
+    ipam:
+      config:
+        - subnet: 10.250.243.0/24
+
+volumes:
+  prometheus-data:
+    name: cynapsa-observability-prometheus
+  grafana-data:
+    name: cynapsa-observability-grafana
+  tempo-data:
+    name: cynapsa-observability-tempo
+  loki-data:
+    name: cynapsa-observability-loki

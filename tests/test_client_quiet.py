@@ -1,5 +1,6 @@
 """HTTP client and launcher checks use fakes, never real profiles or keys."""
 import ast
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -7,6 +8,25 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_client_runner_has_one_visible_mode_switch() -> None:
+    source = (ROOT / "client/run.sh").read_text()
+    lines = source.splitlines()[:12]
+    commands = [
+        "DEMO_RUN_COMMAND='python /app/app.py'",
+        "DEMO_RUN_COMMAND='cynapsa run --config /tmp/cynapsa-private/cynapsa.json -- python /app/app.py'",
+    ]
+    selected = [command for command in commands if command in lines]
+    assert len(selected) == 1
+    assert f"# {next(command for command in commands if command != selected[0])}" in lines
+    assert not (ROOT / "client/run-http.sh").exists()
+    result = subprocess.run(
+        ["bash", "-c", source.split("ROOT=", 1)[0] + '\nprintf "%s" "$DEMO_RUN_COMMAND"'],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == selected[0].split("'", 2)[1]
 
 
 def test_client_app_has_no_cynapsa_import_or_native_session() -> None:
@@ -29,6 +49,22 @@ def test_client_app_has_no_cynapsa_import_or_native_session() -> None:
     assert "requests.post" in source
 
 
+def test_client_in_code_login_example_is_commented_and_valid_python() -> None:
+    source = (ROOT / "client/app.py").read_text()
+    example = source.split("    # import cynapsa\n", 1)[1].split("\n    main()", 1)[0]
+    uncommented = "import cynapsa\n" + "\n".join(
+        line[6:] if line.startswith("    # ") else ""
+        for line in example.splitlines()
+    )
+    ast.parse(uncommented)
+    assert "with cynapsa.login(" in uncommented
+    assert 'mesh_id="cynapsa_demo_cynapsa_demo"' in uncommented
+    assert '"recipient": "cynapsa-demo.agent-4dcbded5-8c32-435a-9e43-eeb37d903e98@connect.cynapsa.com"' in uncommented
+    assert 'os.environ["DEMO_ORCHESTRATOR_ORIGIN"] = origin' in uncommented
+    assert '"mode": "rpc"' in uncommented
+    assert 'os.environ["DEMO_TRANSPORT"] = "cynapsa"' in uncommented
+
+
 def test_client_entrypoint_can_run_the_same_app_as_plain_http(tmp_path):
     python = tmp_path / "python"
     log = tmp_path / "python.log"
@@ -36,7 +72,8 @@ def test_client_entrypoint_can_run_the_same_app_as_plain_http(tmp_path):
     python.chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
            "TEST_LOG": str(log), "DEMO_RUN_COMMAND": "python /app/app.py",
-           "CYNAPSA_TOKEN": "test-only-token", "DEMO_CLIENT_QUIET": "1"}
+               "CYNAPSA_TOKEN": "test-only-token", "DEMO_CLIENT_QUIET": "1",
+               "DEMO_HTTP_ACCESS_KEY": "test-only-key"}
     env.pop("DEMO_ORCHESTRATOR_AGENT_ID", None)
     result = subprocess.run(["/bin/sh", str(ROOT / "client/entrypoint.sh")],
                             env=env, text=True, capture_output=True)
@@ -54,7 +91,7 @@ def test_client_entrypoint_rejects_unknown_command(tmp_path):
 
 @pytest.mark.parametrize("enrollment", ["cached", "fresh", "force"])
 @pytest.mark.parametrize("origin", [None, "https://orchestrator.example.test"])
-def test_entrypoint_forwards_quiet_in_all_login_paths(tmp_path, enrollment, origin):
+def test_entrypoint_builds_cynapsa_config_in_all_login_paths(tmp_path, enrollment, origin):
     log = tmp_path / "calls"
     cli = tmp_path / "cynapsa"
     cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\n')
@@ -76,15 +113,24 @@ def test_entrypoint_forwards_quiet_in_all_login_paths(tmp_path, enrollment, orig
     result = subprocess.run(["/bin/sh", str(ROOT / "client/entrypoint.sh")], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    commands = log.read_text().splitlines()
-    assert len(commands) == 1
-    assert commands[0].startswith("run --mesh-id test-mesh --profile-id demo-client ")
-    assert f"--map {origin or 'http://demo-orchestrator.local'} orchestrator@example.test rpc" in commands[0]
-    assert "--rpc-timeout-ms 140000" in commands[0]
-    assert commands[0].endswith("-- python /app/app.py --quiet")
-    assert ("--token-file" in commands[0]) is (enrollment != "cached")
-    assert ("--force-enroll" in commands[0]) is (enrollment == "force")
-    assert "test-only-token" not in commands[0]
+    config_path = tmp_path / "private" / "cynapsa.json"
+    assert log.read_text().splitlines() == [
+        f"run --config {config_path} -- python /app/app.py --quiet"
+    ]
+    config = json.loads(config_path.read_text())
+    assert config["schema_version"] == 1
+    assert config["mesh_id"] == "test-mesh"
+    assert config["profile_id"] == "demo-client"
+    assert config["rpc_timeout_ms"] == 140000
+    assert config["map"] == [{
+        "origin": origin or "http://demo-orchestrator.local",
+        "recipient": "orchestrator@example.test",
+        "mode": "rpc",
+    }]
+    assert ("token_file" in config) is (enrollment != "cached")
+    assert config.get("force_enroll", False) is (enrollment == "force")
+    assert "test-only-token" not in config_path.read_text()
+    assert config_path.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("build_failure", [False, True])
@@ -104,7 +150,8 @@ def test_quiet_runner_hides_successful_build_but_keeps_build_errors(tmp_path, bu
     envfile.write_text("CYNAPSA_GITHUB_TOKEN=test-only-github-token\nDEMO_MESH_ID=test-mesh\n")
     env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "TEST_LOG": str(log),
            "TEST_BUILD_FAILURE": "1" if build_failure else "0", "TMPDIR": str(tmp_path),
-           "CYNAPSA_DEMO_CLIENT_ENV_FILE": str(envfile), "CYNAPSA_DEMO_CLIENT_VOLUME": "quiet-test-state"}
+           "CYNAPSA_DEMO_CLIENT_ENV_FILE": str(envfile), "CYNAPSA_DEMO_CLIENT_VOLUME": "quiet-test-state",
+           "DEMO_HTTP_ACCESS_KEY": "test-only-key"}
     env.pop("CYNAPSA_TOKEN", None)
     env.pop("CYNAPSA_GITHUB_TOKEN", None)
     result = subprocess.run(["bash", str(ROOT / "client/run.sh"), "--build", "--force-enroll", "--quiet"],
@@ -123,4 +170,8 @@ def test_quiet_runner_hides_successful_build_but_keeps_build_errors(tmp_path, bu
         assert result.stderr == ""
         assert "--env DEMO_CLIENT_QUIET=1" in calls
         assert "--env DEMO_FORCE_ENROLL=1" in calls
+        assert "--env DEMO_RUN_COMMAND" in calls
+        assert "--env DEMO_ORCHESTRATOR_ORIGIN" in calls
+        if "DEMO_RUN_COMMAND='python /app/app.py'" in (ROOT / "client/run.sh").read_text().splitlines()[:12]:
+            assert "--env DEMO_HTTP_ACCESS_KEY" in calls
         assert "src=quiet-test-state" in calls

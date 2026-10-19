@@ -1,0 +1,10 @@
+# Illustrative inventory. Replace both DNS names/labels with every expected
+# continuously running edge. Do not include scale-to-zero roles.
+- targets: [edge-maps.private.example:9443]
+  labels:
+    cynapsa_role: maps
+    cloud_provider: gcp
+- targets: [edge-orchestrator.private.example:9443]
+  labels:
+    cynapsa_role: orchestrator
+    cloud_provider: aws

@@ -67,6 +67,37 @@ def test_maps_http_endpoint_and_error_status(monkeypatch):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("load_app,path,body", [
+    (maps, "/maps", {"question": "cafe"}),
+    (orchestrator, "/ask", {"prompt": "cafe"}),
+])
+def test_plain_http_requires_demo_key(monkeypatch, load_app, path, body):
+    async def run():
+        monkeypatch.setenv("DEMO_TRANSPORT", "http")
+        monkeypatch.setenv("DEMO_HTTP_ACCESS_KEY", "test-only-key")
+        module = load_app(monkeypatch)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.app), base_url="http://localhost") as client:
+            assert (await client.get("/health")).status_code == 200
+            assert (await client.post(path, json=body)).status_code == 401
+            assert (await client.post(path, json=body, headers={"x-demo-access-key": "wrong"})).status_code == 401
+            if path == "/maps":
+                module.app.state.model_client = object()
+                module.app.state.places = object()
+                monkeypatch.setattr(module, "answer_question", lambda *_: {"answer": "ok", "sources": []})
+                authorized = await client.post(path, json=body, headers={"x-demo-access-key": "test-only-key"})
+                assert authorized.status_code == 200
+            else:
+                class Agent:
+                    async def answer(self, *_):
+                        return {"answer": "ok", "maps": None, "files": None}
+
+                module.app.state.agent = Agent()
+                authorized = await client.post(path, json=body, headers={"x-demo-access-key": "test-only-key"})
+                assert authorized.status_code == 200
+
+    asyncio.run(run())
+
+
 def test_maps_lifespan_runs_http_handler_without_mesh(monkeypatch):
     async def run():
         app = maps(monkeypatch)
@@ -189,6 +220,7 @@ def test_orchestrator_lifespan_persists_http_conversation(monkeypatch, tmp_path)
 
 @pytest.mark.parametrize("quiet", [False, True])
 def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys, caplog, quiet):
+    monkeypatch.setenv("DEMO_HTTP_ACCESS_KEY", "test-only-key")
     previous_disable = logging.root.manager.disable
     caplog.set_level(logging.INFO)
     response = requests.Response()
@@ -219,6 +251,7 @@ def test_client_reuses_conversation_then_new_resets_it(monkeypatch, capsys, capl
 
 
 def test_quiet_client_keeps_prompts_answers_and_failures(monkeypatch, capsys, caplog):
+    monkeypatch.setenv("DEMO_HTTP_ACCESS_KEY", "test-only-key")
     denied = requests.Response()
     denied.status_code = 404
     denied._content = b'{"detail":"Missing endpoint"}'

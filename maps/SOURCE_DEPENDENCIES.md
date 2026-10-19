@@ -1,7 +1,7 @@
 # GitHub source dependencies
 
 This directory builds independently. Its Dockerfile fetches SDK
-`feature/cli-operations` and Go Core `main` branch heads from:
+`main` and Go Core `main` branch heads from:
 
 - `https://github.com/Cynapsa/cynapsagocore.git`
 - `https://github.com/Cynapsa/cynapsa-python-sdk.git`

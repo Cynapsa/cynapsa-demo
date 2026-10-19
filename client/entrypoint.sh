@@ -6,9 +6,10 @@ private_directory=${DEMO_PRIVATE_DIRECTORY:-/tmp/cynapsa-private}
 secret_source=${DEMO_SECRET_SOURCE_DIRECTORY:-/run/secrets}
 origin=${DEMO_ORCHESTRATOR_ORIGIN:-http://demo-orchestrator.local}
 
-run_command=${DEMO_RUN_COMMAND:-"cynapsa run -- python /app/app.py"}
+run_command=${DEMO_RUN_COMMAND:-"cynapsa run --config $private_directory/cynapsa.json -- python /app/app.py"}
 case "$run_command" in
   "python /app/app.py")
+    : "${DEMO_HTTP_ACCESS_KEY:?DEMO_HTTP_ACCESS_KEY is required for HTTP mode}"
     unset CYNAPSA_TOKEN
     export DEMO_TRANSPORT=http
     if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
@@ -16,7 +17,7 @@ case "$run_command" in
     fi
     exec python /app/app.py
     ;;
-  "cynapsa run -- python /app/app.py") ;;
+  "cynapsa run --config $private_directory/cynapsa.json -- python /app/app.py") ;;
   *) echo "unsupported DEMO_RUN_COMMAND" >&2; exit 64 ;;
 esac
 
@@ -33,9 +34,7 @@ for profile_path in "$state_directory"/profile-v2-*.state; do
   fi
 done
 
-set -- cynapsa run --mesh-id "${DEMO_MESH_ID:?DEMO_MESH_ID is required}" \
-  --profile-id demo-client --map "$origin" "$DEMO_ORCHESTRATOR_AGENT_ID" rpc \
-  --rpc-timeout-ms 140000
+: "${DEMO_MESH_ID:?DEMO_MESH_ID is required}"
 if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
   if [ -n "${CYNAPSA_TOKEN:-}" ]; then
     printf '%s' "$CYNAPSA_TOKEN" > "$private_directory/enrollment_token"
@@ -46,16 +45,14 @@ if [ "${DEMO_FORCE_ENROLL:-}" = 1 ] || [ "$profile_present" = false ]; then
     exit 78
   fi
   chmod 600 "$private_directory/enrollment_token"
-  unset CYNAPSA_TOKEN
-  set -- "$@" --token-file "$private_directory/enrollment_token"
-  if [ "${DEMO_FORCE_ENROLL:-}" = 1 ]; then
-    set -- "$@" --force-enroll
-  fi
 fi
 
 unset CYNAPSA_TOKEN
+export DEMO_ORCHESTRATOR_ORIGIN=$origin
+python3 "$(dirname "$0")/make_config.py" "$private_directory/cynapsa.json"
 export DEMO_TRANSPORT=cynapsa
 if [ "${DEMO_CLIENT_QUIET:-}" = 1 ]; then
-  exec "$@" -- python /app/app.py --quiet
+  exec cynapsa run --config "$private_directory/cynapsa.json" -- python /app/app.py --quiet
 fi
-exec "$@" -- python /app/app.py
+export CYNAPSA_CLI_NETWORK_EVENTS=1
+exec cynapsa run --config "$private_directory/cynapsa.json" -- python /app/app.py

@@ -53,12 +53,17 @@ application-code change is required for the switch, although the cloud
 platform starts a replacement task/revision.
 
 Successful model/Places HTTP access logs are suppressed. Cynapsa-launched
-application messages use concise `[cynapsa] message sent/received ...` lines;
+application requests use concise `[cynapsa] request started/received` and
+`response received/sent` lines with a short demo request ID and elapsed time;
 CLI lifecycle outcomes (`session.authenticate`, `session.ready`,
-`session.closed`) and changes in the actual `core.status` result are also
-printed in Cynapsa mode. These are not inferred identity or mesh-verification
-events. `client/run.sh --quiet` suppresses the extra network-status stream.
-direct HTTP mode uses `[http]`. Framework startup and warnings remain separate.
+`session.closed`), changes in the actual `core.status` result, and confirmed
+server-authority events (`peer.authorized`, `peer.rejected`, `peer.revoked`)
+are also printed in Cynapsa ASGI mode. The eight-character demo request ID is
+carried in an ordinary HTTP header through the bridge; it is not a Cynapsa
+message ID or distributed trace. No line claims a network path or remote
+delivery from local request submission. `client/run.sh --quiet` suppresses
+the extra network-status stream. Direct HTTP mode uses `[http]`. Framework
+startup and warnings remain separate.
 The demo deliberately logs full request/response content, so use only
 non-sensitive test data.
 There are no native SDK handler or event-observer processes in these images.

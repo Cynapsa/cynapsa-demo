@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -56,13 +59,16 @@ async def files(request: Request) -> dict:
 
     question = question.strip()
     sender = getattr(request.state, "cynapsa_sender", None)
+    supplied_id = request.headers.get("x-demo-request-id", "")
+    request_id = supplied_id if re.fullmatch(r"[0-9a-f]{8}", supplied_id) else uuid.uuid4().hex[:8]
     transport = "cynapsa" if sender or os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
     label = "orchestrator" if sender and sender in {
         os.environ.get("DEMO_ORCHESTRATOR_AGENT_ID"), "http://demo-orchestrator.local"
     } else sender
     peer = f"{label} ({sender})" if label == "orchestrator" else (label or (request.client.host if request.client else "unknown"))
-    LOG.info('[%s] message received from "%s": %s', transport, peer,
+    LOG.info('[%s] request received from "%s" id=%s: %s', transport, peer, request_id,
              json.dumps({"question": question}, ensure_ascii=False))
+    started = time.monotonic()
     try:
         result = await run_in_threadpool(
             answer_question, question, request.app.state.model, request.app.state.database
@@ -73,5 +79,7 @@ async def files(request: Request) -> dict:
     except Exception:
         LOG.exception("Files request failed")
         raise HTTPException(status_code=502, detail="The files agent could not answer") from None
-    LOG.info('[%s] message sent to "%s": %s', transport, peer, json.dumps(result, ensure_ascii=False))
+    LOG.info('[%s] response sent to "%s" id=%s duration_ms=%d: %s',
+             transport, peer, request_id, round((time.monotonic() - started) * 1000),
+             json.dumps(result, ensure_ascii=False))
     return result

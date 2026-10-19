@@ -6,9 +6,12 @@ import json
 import hmac
 import logging
 import os
+import re
 import stat
+import time
 import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,7 @@ MODEL = os.environ.get("LITELLM_MODEL", "chatgpt/gpt-5.6-terra-high")
 BASE_URL = os.environ.get("LITELLM_BASE_URL", "https://litellm.eladrave.com")
 MAPS_ORIGIN = os.environ.get("DEMO_MAPS_ORIGIN", "http://demo-maps.local").rstrip("/")
 FILES_ORIGIN = os.environ.get("DEMO_FILES_ORIGIN", "").rstrip("/")
+REQUEST_ID: ContextVar[str | None] = ContextVar("demo_request_id", default=None)
 
 
 class AskBody(BaseModel):
@@ -66,17 +70,21 @@ async def lifespan(app: FastAPI):
                     name = "maps" if path == "/maps" else "files"
                     identity = os.environ.get(f"DEMO_{name.upper()}_AGENT_ID", origin)
                     transport = "cynapsa" if os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
-                    LOG.info('[%s] message sent to "%s" (%s): %s',
-                             transport, name, identity, json.dumps({"question": question}, ensure_ascii=False))
-                    headers = {}
+                    request_id = REQUEST_ID.get() or uuid.uuid4().hex[:8]
+                    started = time.monotonic()
+                    LOG.info('[%s] request started to "%s" (%s) id=%s: %s',
+                             transport, name, identity, request_id,
+                             json.dumps({"question": question}, ensure_ascii=False))
+                    headers = {"x-demo-request-id": request_id}
                     if transport == "http":
                         key = os.environ.get("DEMO_HTTP_ACCESS_KEY", "")
                         if not key:
                             raise RuntimeError("DEMO_HTTP_ACCESS_KEY is required for HTTP transport")
                         headers["x-demo-access-key"] = key
                     response = await downstream.post(origin + path, json={"question": question}, headers=headers)
-                    LOG.info('[%s] message received from "%s" (%s): %s',
-                             transport, name, identity, response.text)
+                    LOG.info('[%s] response received from "%s" (%s) id=%s status=%d duration_ms=%d: %s',
+                             transport, name, identity, request_id, response.status_code,
+                             round((time.monotonic() - started) * 1000), response.text)
                     response.raise_for_status()
                     try:
                         result = response.json()
@@ -141,14 +149,18 @@ async def ask(request: Request) -> dict[str, Any]:
         ) from None
 
     sender = getattr(request.state, "cynapsa_sender", None)
+    supplied_id = request.headers.get("x-demo-request-id", "")
+    request_id = supplied_id if re.fullmatch(r"[0-9a-f]{8}", supplied_id) else uuid.uuid4().hex[:8]
     transport = "cynapsa" if sender or os.environ.get("DEMO_TRANSPORT") == "cynapsa" else "http"
     label = "client" if sender and sender in {
         os.environ.get("DEMO_CLIENT_AGENT_ID"), os.environ.get("DEMO_CLIENT_ORIGIN")
     } else sender
     peer = f"{label} ({sender})" if label == "client" else (label or (request.client.host if request.client else "unknown"))
-    LOG.info('[%s] message received from "%s": %s',
-             transport, peer,
+    LOG.info('[%s] request received from "%s" id=%s: %s',
+             transport, peer, request_id,
              json.dumps({"prompt": body.prompt, "conversation_id": conversation_id}, ensure_ascii=False))
+    started = time.monotonic()
+    token = REQUEST_ID.set(request_id)
     try:
         answer = await request.app.state.agent.answer(body.prompt.strip(), key)
     except (TimeoutError, httpx.TimeoutException) as exc:
@@ -161,6 +173,10 @@ async def ask(request: Request) -> dict[str, Any]:
     except Exception as exc:
         LOG.exception("Orchestrator request failed: %r", exc)
         raise HTTPException(502, detail={"code": "orchestrator_failed", "message": "The demo could not answer"}) from None
+    finally:
+        REQUEST_ID.reset(token)
     result = {**answer, "conversation_id": conversation_id}
-    LOG.info('[%s] message sent to "%s": %s', transport, peer, json.dumps(result, ensure_ascii=False))
+    LOG.info('[%s] response sent to "%s" id=%s duration_ms=%d: %s',
+             transport, peer, request_id, round((time.monotonic() - started) * 1000),
+             json.dumps(result, ensure_ascii=False))
     return result
